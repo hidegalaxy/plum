@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Plum">
+<meta name="theme-color" content="#0c0c0d">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icono-192.png">
+<title>Plum</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* Oscura como Lima: poco por pantalla, mucho aire y un solo color fuerte (ciruela). */
+  :root {
+    color-scheme: dark;
+    --bg: #0c0c0d;
+    --surface: #161618;
+    --line: #232327;
+    --track: #2a2a2f;
+    --text: #f4f4f2;
+    --muted: #9a9aa1;
+    --dim: #67676e;
+    --plum: #c3a2ff;
+    --ink: #0c0c0d;
+    --exam: #ff6b5e;
+    --due: #ffc247;
+    --font: 'Space Grotesk', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 var(--font); overscroll-behavior: none; }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--plum); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  .app { height: 100%; display: flex; flex-direction: column; max-width: 520px; margin: 0 auto; position: relative; overflow: hidden; }
+
+  header { display: flex; align-items: center; gap: 12px; padding: max(18px, env(safe-area-inset-top, 0px)) max(20px, env(safe-area-inset-right, 0px)) 8px max(20px, env(safe-area-inset-left, 0px)); }
+  header h1 { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -.03em; }
+  header span { color: var(--muted); font-size: 15px; flex: 1; padding-top: 6px; }
+  .mas { width: 42px; height: 42px; border-radius: 14px; border: 0; background: var(--plum); color: var(--ink); display: grid; place-items: center; flex: 0 0 auto; }
+  .carga { position: absolute; top: 0; left: 0; height: 2px; width: 0; background: var(--plum); z-index: 9; transition: width .3s, opacity .4s; opacity: 0; }
+  .carga.ver { width: 70%; opacity: 1; transition: width 4s cubic-bezier(.1,.6,.3,1); }
+
+  main { flex: 1; min-height: 0; overflow-y: auto; padding: 8px max(20px, env(safe-area-inset-right, 0px)) 28px max(20px, env(safe-area-inset-left, 0px)); display: flex; flex-direction: column; gap: 22px; }
+  .eti { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+  .vacio { color: var(--muted); margin: 0; }
+
+  /* Today: lo que toca ahora */
+  .ahora { background: var(--plum); color: var(--ink); border-radius: 26px; padding: 20px 22px; display: flex; flex-direction: column; gap: 6px; border: 0; text-align: left; width: 100%; }
+  .ahora.otro { background: var(--surface); color: var(--text); border: 1px solid var(--line); }
+  .ahora .eti { color: rgba(12,12,13,.65); }
+  .ahora.otro .eti { color: var(--muted); }
+  .ahora h2 { margin: 0; font-size: 30px; letter-spacing: -.03em; line-height: 1.08; overflow-wrap: anywhere; }
+  .ahora p { margin: 0; font-weight: 600; opacity: .75; }
+  .ahora .como { font-weight: 500; opacity: .9; white-space: pre-line; line-height: 1.45; margin-top: 4px; }
+  .ahora .fila { margin-top: 10px; }
+  .ahora .btn { background: var(--ink); color: var(--plum); }
+  .ahora .btn.sec { border-color: rgba(12,12,13,.3); color: var(--ink); }
+  .ahora.otro .btn { background: var(--plum); color: var(--ink); }
+  .ahora.otro .btn.sec { border-color: var(--track); color: var(--text); }
+  .despues { margin: -12px 0 0; color: var(--muted); font-size: 14px; padding-left: 4px; }
+
+  .tip { border: 1px solid var(--line); border-radius: 22px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; background: var(--surface); }
+  .tip p { margin: 0; line-height: 1.5; }
+  .tip b { color: var(--plum); font-weight: 600; }
+  .fila { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn { height: 44px; padding: 0 18px; border-radius: 14px; border: 0; background: var(--plum); color: var(--ink); font-weight: 700; }
+  .btn.sec { background: none; border: 1px solid var(--track); color: var(--text); font-weight: 600; }
+  .btn.peligro { background: none; border: 1px solid #5a2a27; color: var(--exam); font-weight: 600; }
+  .btn.peligro.seguro { background: var(--exam); color: var(--ink); border-color: var(--exam); }
+  .btn.ancho { width: 100%; height: 50px; }
+  .btn:disabled { opacity: .5; }
+
+  .meta { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 22px; padding: 14px 18px; text-align: left; width: 100%; }
+  .meta .n { grid-row: span 2; font-size: 34px; font-weight: 700; letter-spacing: -.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .meta .n small { font-size: 13px; letter-spacing: 0; font-weight: 600; color: var(--muted); margin-left: 3px; }
+  .meta b { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .pastillas { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pastilla { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); font-size: 14px; font-weight: 600; max-width: 100%; }
+  .pastilla i { width: 8px; height: 8px; border-radius: 4px; flex: 0 0 auto; }
+  .pastilla span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .dia { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .dia li > button { display: grid; grid-template-columns: 50px 8px 1fr auto; align-items: center; gap: 12px; padding: 10px 0; width: 100%; background: none; border: 0; text-align: left; }
+  .dia time { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 15px; }
+  .dia i { width: 8px; height: 8px; border-radius: 4px; }
+  .dia b { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+  .dia small { display: block; color: var(--dim); font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dia .pasado { opacity: .4; }
+  .dia .estudio b { color: var(--plum); }
+  .dia .ok { color: var(--plum); }
+  .dia .linea { display: grid; grid-template-columns: 50px 1fr; align-items: center; gap: 12px; padding: 2px 0; color: var(--plum); font-size: 12px; font-weight: 700; }
+  .dia .linea::after { content: ''; height: 2px; border-radius: 1px; background: var(--plum); }
+  .compacta li > button { padding: 7px 0; }
+
+  .rapido { display: flex; align-items: center; gap: 10px; border: 1px solid var(--track); border-radius: 18px; padding: 0 8px 0 16px; }
+  .rapido input { flex: 1; min-width: 0; height: 52px; border: 0; background: none; outline: none; font-size: 16px; }
+  .rapido input::placeholder { color: var(--dim); }
+  .rapido button { width: 38px; height: 38px; border: 0; border-radius: 12px; background: var(--track); display: grid; place-items: center; color: var(--plum); flex: 0 0 auto; }
+  .previa { font-size: 13px; color: var(--muted); margin: -14px 0 0 6px; min-height: 18px; }
+  .previa b { color: var(--plum); font-weight: 600; }
+
+  /* Exams */
+  .examenes { display: flex; flex-direction: column; gap: 10px; }
+  .ex { background: var(--surface); border: 1px solid var(--line); border-radius: 22px; padding: 16px 18px; display: grid; grid-template-columns: 58px 1fr; gap: 4px 14px; width: 100%; text-align: left; }
+  .ex .n { grid-row: span 3; font-size: 38px; font-weight: 700; letter-spacing: -.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .ex .n small { display: block; font-size: 12px; letter-spacing: 0; font-weight: 600; color: var(--muted); margin-top: 4px; }
+  .ex b { font-weight: 600; min-width: 0; }
+  .ex .cuando { font-size: 13px; color: var(--muted); }
+  .asig { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 6px; background: var(--track); color: var(--text); margin-right: 6px; vertical-align: 2px; }
+  .barra { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 6px; }
+  .barra span { flex: 1; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+  .barra em { display: block; height: 100%; border-radius: 3px; background: var(--plum); }
+  .ex .prox { grid-column: 2; font-size: 13px; opacity: .85; }
+  .ex .prox.falta { color: var(--due); }
+  .sesiones { grid-column: 1 / -1; list-style: none; margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+  .sesiones li { display: grid; grid-template-columns: 14px 118px 1fr; gap: 8px; align-items: baseline; }
+  .sesiones li span { white-space: nowrap; }
+  .sesiones li span { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .sesiones .si { color: var(--plum); }
+  .sesiones .no { color: var(--due); }
+  .sesiones em { font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Tasks */
+  .grupo { display: flex; flex-direction: column; gap: 2px; }
+  .tarea { display: flex; align-items: center; gap: 4px; }
+  .tarea > button:first-child { flex: 1; display: flex; align-items: center; gap: 14px; padding: 10px 0; text-align: left; background: none; border: 0; min-width: 0; }
+  .tarea .c { width: 26px; height: 26px; flex: 0 0 26px; border-radius: 13px; border: 2px solid var(--track); display: grid; place-items: center; color: var(--ink); }
+  .tarea.ok .c { background: var(--plum); border-color: var(--plum); }
+  .tarea.ok b { color: var(--dim); text-decoration: line-through; }
+  .tarea b { font-weight: 500; }
+  .tarea small { display: block; color: var(--muted); font-size: 12px; }
+  .tarea small.vencida { color: var(--exam); }
+  .quitar { width: 36px; height: 36px; border: 0; background: none; color: var(--dim); border-radius: 10px; display: grid; place-items: center; }
+
+  nav { display: flex; border-top: 1px solid var(--line); padding: 4px max(8px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px)); }
+  nav button { flex: 1; border: 0; background: none; color: var(--dim); display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0 4px; font-size: 11px; font-weight: 600; }
+  nav button[aria-current] { color: var(--plum); }
+
+  /* Hojas que suben desde abajo */
+  .velo { position: absolute; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: flex-end; z-index: 5; }
+  .hoja { width: 100%; background: var(--surface); border-radius: 28px 28px 0 0; border-top: 1px solid var(--track); padding: 20px 20px max(24px, env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 14px; max-height: 92%; overflow-y: auto; animation: sube .25s ease; }
+  @keyframes sube { from { transform: translateY(30px); opacity: .5; } }
+  .hoja h3 { margin: 0; font-size: 22px; letter-spacing: -.02em; overflow-wrap: anywhere; }
+  .hoja .cuando { color: var(--muted); margin: -8px 0 0; }
+  .hoja .como { margin: 0; white-space: pre-line; line-height: 1.5; background: var(--bg); border-radius: 14px; padding: 12px 14px; }
+  .campo { width: 100%; height: 48px; border: 1px solid var(--track); background: var(--bg); border-radius: 14px; padding: 0 14px; outline: none; }
+  .campo:focus { border-color: var(--plum); }
+  .dos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .dos label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chips button { height: 38px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--track); background: none; font-weight: 600; font-size: 14px; }
+  .chips button[aria-pressed="true"] { background: var(--text); color: var(--ink); border-color: var(--text); }
+  .nota { font-size: 13px; color: var(--muted); margin: 0; line-height: 1.5; }
+
+  .toast { position: absolute; left: 16px; right: 16px; bottom: 84px; background: var(--text); color: var(--ink); padding: 12px 16px; border-radius: 14px; font-weight: 600; font-size: 14px; opacity: 0; transform: translateY(8px); transition: .25s; pointer-events: none; z-index: 8; }
+  .toast.ver { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body data-k="<?= clave ?>">
+<div class="app">
+  <div class="carga" id="carga"></div>
+  <header><h1 id="titulo">Plum</h1><span id="sub"></span>
+    <button class="mas" id="mas" aria-label="Añadir"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></header>
+  <main id="vista"><p class="vacio">Cargando…</p></main>
+  <nav id="nav">
+    <button data-tab="today"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>Today</button>
+    <button data-tab="exams"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg>Exams</button>
+    <button data-tab="tasks"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Tasks</button>
+  </nav>
+  <div class="velo" id="velo" hidden></div>
+  <div class="toast" id="toast" role="status"></div>
+</div>
+
+<script>
+// <interpretar>
+// Entiende frases en castellano o catalán como «examen de fluidos el jueves a las 10»
+// o «sopar amb la Marta demà a les 21h». hoy: 'yyyy-mm-dd'.
+// Devuelve { titulo, dia, diaFin, hora, fin, min, todoDia, tipo, tarea, lugar }: dia y hora quedan vacíos si la frase no los dice.
+// Este bloque está copiado igual en Codigo.gs y en Panel.html (node sincronizar.js lo copia desde interpretar.js).
+function interpretar(texto, hoy) {
+  const orig = String(texto || '').replace(/[’`´]/g, "'").replace(/\s+/g, ' ').trim();
+  // Copia en minúsculas y sin acentos con la misma longitud: así las posiciones sirven para recortar el título.
+  const n = orig.split('').map(c => {
+    const s = c.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    return s.length === 1 ? s : c;
+  }).join('');
+  const usado = new Array(n.length).fill(false);
+  // Primera coincidencia que no pisa nada ya reconocido; la marca como usada.
+  const tomar = re => {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(n))) {
+      let libre = true;
+      for (let i = m.index; i < m.index + m[0].length; i++) if (usado[i]) libre = false;
+      if (libre && m[0]) {
+        for (let i = m.index; i < m.index + m[0].length; i++) usado[i] = true;
+        return m;
+      }
+      if (!m[0]) re.lastIndex++;
+    }
+    return null;
+  };
+
+  const r = { titulo: '', dia: '', diaFin: '', hora: '', fin: '', min: 0, todoDia: false, tipo: 'evento', tarea: false, lugar: '' };
+  const [y0, m0, d0] = String(hoy).split('-').map(Number);
+  const base = Date.UTC(y0, m0 - 1, d0);
+  const iso = t => new Date(t).toISOString().slice(0, 10);
+  const mas = k => iso(base + k * 86400000);
+  const dow = (new Date(base).getUTCDay() + 6) % 7; // 0 = lunes
+  const dosCifras = x => String(x).padStart(2, '0');
+  const fecha = (y, m, d) => {
+    const t = Date.UTC(y, m - 1, d);
+    const f = new Date(t);
+    return f.getUTCMonth() === m - 1 && f.getUTCDate() === d ? iso(t) : '';
+  };
+  // Día y mes sin año: el próximo que llegue (si ya pasó este año, el año que viene).
+  const proxima = (m, d) => {
+    const f = fecha(y0, m, d);
+    return f && f < hoy ? fecha(y0 + 1, m, d) : f;
+  };
+
+  // Tarea en vez de evento.
+  if (tomar(/^(?:tareas?|tascas?|pendiente|recordar|recorda'm|recordatorio)\b[\s:,.-]*/g)) r.tarea = true;
+
+  // Lugar al final: «… @ biblioteca».
+  const lugar = tomar(/\s*@\s*(.+)$/g);
+  if (lugar) r.lugar = orig.substr(lugar.index + lugar[0].indexOf('@') + 1).trim();
+
+  if (tomar(/\b(?:todo el dia|tot el dia)\b/g)) r.todoDia = true;
+
+  // Franja del día: sirve de hora si no se dice otra y para saber si «a las 5» es por la tarde.
+  let franja = '';
+  const fr = tomar(/\b(?:por la|de la|a la|per la|pel|al|esta|aquesta)\s+(manana|mati|tarde|tarda|noche|nit|mediodia|migdia)\b/g);
+  if (fr) {
+    franja = { manana: 'manana', mati: 'manana', tarde: 'tarde', tarda: 'tarde', noche: 'noche', nit: 'noche', mediodia: 'mediodia', migdia: 'mediodia' }[fr[1]];
+    if (/^(esta|aquesta)\b/.test(fr[0])) r.dia = mas(0);
+  }
+
+  // Día.
+  const rel = r.dia ? null : tomar(/\b(pasado manana|passat dema|dema passat|hoy|avui|manana|dema)\b/g);
+  if (rel) {
+    const w = rel[1];
+    r.dia = /pasado|passat/.test(w) ? mas(2) : /manana|dema/.test(w) ? mas(1) : mas(0);
+  }
+  if (!r.dia) {
+    const en = tomar(/\b(?:en|dentro de|d'aqui a|d'aqui|daqui a)\s+(\d{1,3})\s+(dias?|dies|semanas?|setmanes?)\b/g);
+    if (en) r.dia = mas(Number(en[1]) * (/^s/.test(en[2]) ? 7 : 1));
+  }
+  const DIAS = ['lunes|dilluns', 'martes|dimarts', 'miercoles|dimecres', 'jueves|dijous', 'viernes|divendres', 'sabado|dissabte', 'domingo|diumenge'];
+  if (!r.dia) {
+    const sem = tomar(/\b(?:(?:el|este|aquest|el proximo|el proxim|proximo|proxim)\s+)?(lunes|martes|miercoles|jueves|viernes|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)(?:\s+(que viene|que ve|vinent|proximo|proxim|de la semana que viene|de la setmana que ve))?\b/g);
+    if (sem) {
+      const idx = DIAS.findIndex(d => d.split('|').indexOf(sem[1]) >= 0);
+      // «El jueves» dicho un jueves es el de la semana que viene.
+      let delta = (idx - dow + 7) % 7 || 7;
+      if (sem[2] && /semana|setmana/.test(sem[2]) && delta < 7 && idx >= dow) delta += 7;
+      r.dia = mas(delta);
+    }
+  }
+  const MESES = ['ene|gen', 'feb', 'mar', 'abr', 'may|mai', 'jun', 'jul', 'ago', 'sep|set', 'oct', 'nov', 'dic|des'];
+  const numMes = w => MESES.findIndex(alts => alts.split('|').some(a => w.indexOf(a) === 0)) + 1;
+  const MES_RE = '(enero|gener|febrero|febrer|marzo|marc|abril|mayo|maig|junio|juny|julio|juliol|agosto|agost|septiembre|setiembre|setembre|octubre|noviembre|novembre|diciembre|desembre|ene|feb|mar|abr|jun|jul|ago|sept|sep|set|oct|nov|dic|des)';
+  // Varios días seguidos: «del 6 al 9 de diciembre» → todo el día, de ida a vuelta.
+  if (!r.dia) {
+    const dd = tomar(new RegExp("\\b(?:del|de|desde el|des del)\\s+(\\d{1,2})\\s+(?:al|a|hasta el|fins al)\\s+(\\d{1,2})\\s*(?:de\\s+|d'|del\\s+)?" + MES_RE + '\\b', 'g'));
+    if (dd && Number(dd[1]) <= Number(dd[2])) {
+      r.dia = proxima(numMes(dd[3]), Number(dd[1]));
+      r.diaFin = r.dia ? fecha(Number(r.dia.slice(0, 4)), numMes(dd[3]), Number(dd[2])) : '';
+      r.todoDia = !!r.diaFin;
+    }
+  }
+  if (!r.dia) {
+    const dm = tomar(/\b(?:el\s+)?(?:dia\s+)?(\d{1,2})\s*(?:de\s+|d'|del\s+)?(enero|gener|febrero|febrer|marzo|marc|abril|mayo|maig|junio|juny|julio|juliol|agosto|agost|septiembre|setiembre|setembre|octubre|noviembre|novembre|diciembre|desembre|ene|feb|mar|abr|jun|jul|ago|sept|sep|set|oct|nov|dic|des)\b\.?(?:\s+(?:de\s+|del\s+)?(\d{4}))?/g);
+    if (dm) r.dia = dm[3] ? fecha(Number(dm[3]), numMes(dm[2]), Number(dm[1])) : proxima(numMes(dm[2]), Number(dm[1]));
+  }
+
+  // Horas: «10:30», «10.30», «10h», «10h30» o un número tras «a las».
+  const NUM = '(\\d{1,2})(?:[:.](\\d{2})|h(\\d{2})?)?';
+  const ART = "(?:(?:las?|les|l')\\s*)?";
+  // Entrenar se hace temprano: «correr a las 6» son las 6 de la mañana.
+  const madruga = /\b(entreno|entrenar|entrenament|correr|calistenia|movilidad|mobilitat|gimnasio|gym|running|rodaje)\b/.test(n);
+  const minutos = (h, m, crudo) => {
+    h = Number(h);
+    m = Number(m || 0);
+    if (h > 24 || m > 59) return null;
+    // Sin «de la mañana», de 1 a 7 es por la tarde («a las 5» → 17:00), salvo que se escriba con cero delante.
+    if (franja === 'manana' || /^0/.test(crudo)) return h * 60 + m;
+    if ((franja === 'tarde' || franja === 'noche') && h < 12) h += 12;
+    else if (!franja && h >= 1 && h <= 7 && !(madruga && h >= 5)) h += 12;
+    return (h % 24) * 60 + m;
+  };
+  let ini = null;
+  let fin = null;
+  const rango = tomar(new RegExp('\\b(?:de|desde|des de|entre)\\s+' + ART + NUM + '\\s*(?:a|y|i|hasta|fins a|fins)\\s+' + ART + NUM + '(?:\\s*(?:h|horas|hores)\\b)?', 'g'))
+    || tomar(new RegExp('\\b(\\d{1,2})(?:[:.](\\d{2})|h(\\d{2})?)\\s*-\\s*' + NUM + '\\b', 'g'));
+  if (rango) {
+    ini = minutos(rango[1], rango[2] || rango[3], rango[1]);
+    fin = minutos(rango[4], rango[5] || rango[6], rango[4]);
+    if (ini != null && fin != null && fin <= ini && fin + 720 > ini) fin += 720;
+  }
+  if (ini == null) {
+    const t = tomar(new RegExp('\\b(?:a|sobre|cap a|hacia|at)\\s+' + ART + NUM + '(?:\\s*(?:h|horas|hores)\\b)?', 'g'));
+    if (t) ini = minutos(t[1], t[2] || t[3], t[1]);
+  }
+  // Duración: «2 horas», «durante 1h30», «45 min».
+  let dur = 0;
+  const d1 = tomar(/\b(?:durante|durant|por|per)\s+(\d+(?:[.,]\d+)?)\s*(?:h(\d{2})?|horas?|hores?|min|minutos?|minuts?)\b/g)
+    || tomar(/\b(\d+(?:[.,]\d+)?)\s*(?:horas?|hores?|min|minutos?|minuts?)\b/g);
+  if (d1) {
+    const v = Number(d1[1].replace(',', '.'));
+    dur = /min/.test(d1[0]) ? v : v * 60 + Number(d1[2] || 0);
+  }
+  if (ini == null) {
+    // «10h», «10:30» o «10.30» sueltos. Un «2h» suelto (de 1 a 5) se entiende como duración.
+    const t = tomar(/\b(\d{1,2})(?:[:.](\d{2})|h(\d{2})?)(?![\d/-])/g);
+    if (t) {
+      if (!t[2] && !t[3] && Number(t[1]) <= 5 && !dur) dur = Number(t[1]) * 60;
+      else ini = minutos(t[1], t[2] || t[3], t[1]);
+    }
+  }
+  if (!dur) {
+    const d2 = tomar(/\b(\d)h(\d{2})\b/g);
+    if (d2) dur = Number(d2[1]) * 60 + Number(d2[2]);
+  }
+
+  // Fechas con números, después de las horas para no confundir «10.30» con una fecha.
+  if (!r.dia) {
+    const num = tomar(/\b(?:el\s+)?(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b/g);
+    if (num) {
+      const y = num[3] ? Number(num[3].length === 2 ? '20' + num[3] : num[3]) : 0;
+      r.dia = y ? fecha(y, Number(num[2]), Number(num[1])) : proxima(Number(num[2]), Number(num[1]));
+    }
+  }
+  if (!r.dia) {
+    const sol = tomar(/\b(?:el|dia|el dia)\s+(\d{1,2})\b(?!\s*(?:h\b|:|horas|hores|min))/g);
+    if (sol) {
+      const d = Number(sol[1]);
+      let f = fecha(y0, m0, d);
+      if (!f || f < hoy) f = m0 === 12 ? fecha(y0 + 1, 1, d) : fecha(y0, m0 + 1, d);
+      r.dia = f;
+    }
+  }
+
+  if (ini == null && franja && !r.todoDia) ini = { manana: 540, mediodia: 840, tarde: 1020, noche: 1260 }[franja];
+
+  // Tipo por palabras clave (el orden importa: «entregar práctica» es una entrega, no una clase).
+  const TIPOS = [
+    ['estudio', /\b(estudiar|estudio|estudi|repasar|repaso|repassar|repas|sesion de estudio)\b/],
+    ['viaje', /\b(viaje|viatge|escapada|salida|sortida|excursion|excursio|acampada|campaments?|colonias|colonies)\b/],
+    ['entreno', /\b(entreno|entrenar|entrenament|gimnasio|gym|correr|corriendo|calistenia|movilidad|mobilitat|running|rodaje|series)\b/],
+    ['examen', /\b(examen|examenes|examens|exam|parcial|parcials|final de|prueba|control|test|recuperacion|recuperacio)\b/],
+    ['entrega', /\b(entrega|entregas|entregar|lliurament|lliurar|deadline|fecha limite|data limit)\b/],
+    ['clase', /\b(clase|clases|classe|classes|teoria|practicas?|laboratorio|lab|seminario|seminari|tutoria)\b/],
+    ['cita', /\b(medico|metge|dentista|cita|consulta|fisio|peluqueria|perruqueria|barbero|revision|revisio|banco|banc|entrevista)\b/],
+    ['plan', /\b(cena|sopar|comida|dinar|quedada|quedar|fiesta|festa|cumple|cumpleanos|aniversari|cine|cinema|concierto|concert|partido|partit|birras?|cafe)\b/],
+  ];
+  const tipo = TIPOS.find(t => t[1].test(n));
+  if (tipo) r.tipo = tipo[0];
+
+  if (ini != null) {
+    r.hora = dosCifras(Math.floor(ini / 60)) + ':' + dosCifras(ini % 60);
+    r.min = fin != null ? fin - ini : dur || ({ examen: 120, plan: 120, estudio: 50 }[r.tipo] || 60);
+    const f = ini + r.min;
+    r.fin = dosCifras(Math.floor(f / 60) % 24) + ':' + dosCifras(f % 60);
+  } else {
+    r.min = dur;
+    if (!r.tarea) r.todoDia = true;
+  }
+
+  // Título: lo que queda sin reconocer, sin palabras sueltas en los bordes.
+  let t = orig.split('').map((c, i) => usado[i] ? ' ' : c).join('').replace(/\s+/g, ' ').trim();
+  const SUELTAS = "el|la|los|las|lo|de|del|a|al|en|y|i|e|amb|con|para|per|que|les|l'|d'|por|este|esta|aquest|aquesta|sobre|hacia|cap|durante|durant|desde|des|hasta|fins";
+  const borde = new RegExp('^(?:(?:' + SUELTAS + ")(?:\\s+|$)|[,.;:\\-–])+|(?:\\s+(?:" + SUELTAS + ')|\\s*[,.;:\\-–])+$', 'i');
+  for (let i = 0; i < 4; i++) t = t.replace(borde, '').trim();
+  r.titulo = t ? t.charAt(0).toUpperCase() + t.slice(1) : '';
+  return r;
+}
+// </interpretar>
+</script>
+<script>
+  // Servidor de Google con el que habla la web propia (en GitHub). Cada persona tiene el suyo:
+  // llega como ?api=ID la primera vez y se recuerda.
+  const API = leerApi();
+  const EN_GOOGLE = !!(window.google && google.script && google.script.run);
+  const K = leerClave();
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const DIAS = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
+  const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  const COLOR = {
+    estudio: '#c3a2ff', examen: '#ff6b5e', entrega: '#ffc247', clase: '#5aa2ff', entreno: '#ff9f43', trabajo: '#6c6c73',
+    cau: '#3fd69b', viaje: '#4dd0e1', cita: '#ff8fc7', plan: '#a3e635', evento: '#9a9aa1', festivo: '#9a9aa1',
+  };
+  const NOMBRE = {
+    estudio: 'Estudio', examen: 'Examen', entrega: 'Entrega', clase: 'Clase', entreno: 'Entreno', trabajo: 'Trabajo',
+    cau: 'Cau', viaje: 'Viaje', cita: 'Cita', plan: 'Plan', evento: 'Evento', festivo: 'Festivo',
+  };
+  const OK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>';
+  const X = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+
+  let D = null;
+  let tab = 'today';
+  let abierto = '';       // examen desplegado en Exams
+  let cargadoEn = 0;
+  try { tab = localStorage.getItem('plum.tab') || 'today'; } catch (e) {}
+  if (!['today', 'exams', 'tasks'].includes(tab)) tab = 'today';
+
+  // ---------- Servidor ----------
+
+  function leerApi() {
+    const q = new URLSearchParams(location.search).get('api');
+    let id = q && /^[\w-]{20,}$/.test(q) ? q : '';
+    if (id) {
+      try { localStorage.setItem('plum.api', id); } catch (e) {}
+    } else {
+      try { id = localStorage.getItem('plum.api') || ''; } catch (e) {}
+    }
+    return id ? 'https://script.google.com/macros/s/' + id + '/exec' : '';
+  }
+
+  // Dentro de Google la clave llega en la página; en la web propia, por ?k= la primera vez y luego se recuerda.
+  function leerClave() {
+    const dk = document.body.dataset.k || '';
+    if (/^[\w-]{4,}$/.test(dk)) return dk;
+    const q = new URLSearchParams(location.search).get('k');
+    // La dirección se queda con ?api y ?k: la app de la pantalla de inicio del iPhone no comparte memoria con Safari.
+    if (q) {
+      try { localStorage.setItem('plum.k', q); } catch (e) {}
+      return q;
+    }
+    try { return localStorage.getItem('plum.k') || ''; } catch (e) { return ''; }
+  }
+
+  function run(fn, ...args) {
+    if (EN_GOOGLE) {
+      return new Promise((ok, ko) => google.script.run.withSuccessHandler(ok).withFailureHandler(ko)[fn](K, ...args));
+    }
+    return llamarApi(fn, args);
+  }
+
+  // text/plain evita la comprobación previa del navegador, que el servidor de Google no contesta.
+  async function llamarApi(fn, args) {
+    const r = fn === 'datos'
+      ? await fetch(API + '?accion=datos&k=' + encodeURIComponent(K))
+      : await fetch(API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ api: fn, k: K, que: args[0], d: args[1] }),
+        });
+    let j;
+    try { j = await r.json(); } catch (e) { throw new Error('El servidor no ha contestado bien, prueba otra vez'); }
+    if (j && j.error) throw new Error(j.error);
+    return j;
+  }
+
+  function cargando(si) { $('carga').classList.toggle('ver', si); }
+
+  async function cargar() {
+    cargando(true);
+    try {
+      D = await run('datos');
+      cargadoEn = Date.now();
+      guardarCache(D);
+      pintar();
+    } catch (e) {
+      if (/clave/i.test(e.message) && !EN_GOOGLE) pantallaClave(e.message);
+      else if (!D) pantallaError(e.message);
+      else avisar('Sin conexión: ' + e.message);
+    }
+    cargando(false);
+  }
+
+  // Escribir: el servidor contesta con los datos ya actualizados.
+  async function hacer(que, d, boton) {
+    if (boton) boton.disabled = true;
+    cargando(true);
+    try {
+      const r = await run('accion', que, d);
+      D = r.datos;
+      cargadoEn = Date.now();
+      guardarCache(D);
+      cerrarHoja();
+      pintar();
+      if (r.msg) avisar(r.msg.replace(/^✅\s*/, ''));
+      return true;
+    } catch (e) {
+      avisar(e.message);
+      if (boton) boton.disabled = false;
+      return false;
+    } finally {
+      cargando(false);
+    }
+  }
+
+  function guardarCache(d) {
+    try { localStorage.setItem('plum.cache', JSON.stringify(d)); } catch (e) {}
+  }
+  function leerCache() {
+    try { return JSON.parse(localStorage.getItem('plum.cache') || 'null'); } catch (e) { return null; }
+  }
+
+  function pantallaClave(error) {
+    $('nav').hidden = true;
+    $('mas').hidden = true;
+    $('titulo').textContent = 'Plum';
+    $('sub').textContent = '';
+    if (!API && !EN_GOOGLE) {
+      $('vista').innerHTML = `<section class="tip"><b>Falta conectar tu calendario</b>
+        <p class="nota">Abre Plum con el enlace o el código QR que te dio tu servidor de Google (la dirección que acaba en /exec). Solo hace falta la primera vez.</p></section>`;
+      return;
+    }
+    $('vista').innerHTML = `<form class="tip" id="formClave" autocomplete="off">
+        <p class="nota">${error ? esc(error) + '. ' : ''}Escribe tu clave para entrar (solo la primera vez).</p>
+        <input class="campo" name="clave" placeholder="Clave" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <button class="btn">Entrar</button>
+      </form>`;
+    $('formClave').onsubmit = e => {
+      e.preventDefault();
+      const c = new FormData(e.target).get('clave').trim();
+      if (c) location.href = location.pathname + '?k=' + encodeURIComponent(c);
+    };
+  }
+
+  function pantallaError(msg) {
+    $('vista').innerHTML = `<section class="tip"><b>No he podido abrir tu calendario</b><p class="nota">${esc(msg)}</p>
+      <button class="btn" data-act="reintentar">Reintentar</button></section>`;
+  }
+
+  // ---------- Utilidades ----------
+
+  function avisar(t) {
+    const x = $('toast');
+    x.textContent = t;
+    x.classList.add('ver');
+    clearTimeout(avisar.t);
+    avisar.t = setTimeout(() => x.classList.remove('ver'), 3000);
+  }
+
+  const diaMas = (dia, n) => {
+    const [y, m, d] = dia.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+  };
+  const diaSemana = dia => { const [y, m, d] = dia.split('-').map(Number); return (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7; };
+  const fecha = dia => DIAS[diaSemana(dia)] + ' ' + Number(dia.slice(8)) + ' ' + MESES[Number(dia.slice(5, 7)) - 1];
+  const fin = e => e.t + e.min * 60000;
+  const horas = min => { const h = Math.round(min / 6) / 10; return String(h).replace('.', ',') + ' h'; };
+  const hoyLocal = () => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' + String(n.getDate()).padStart(2, '0'); };
+  const cuantoFalta = t => {
+    const m = Math.round((t - Date.now()) / 60000);
+    if (m < 60) return 'en ' + Math.max(1, m) + ' min';
+    const h = Math.floor(m / 60), r = m % 60;
+    return 'en ' + h + ' h' + (r ? ' ' + r : '');
+  };
+  const primeraLinea = s => String(s || '').split('\n').find(l => l.trim()) || '';
+  // Un evento se identifica por id + calendario + inicio (los de una serie comparten id).
+  const clave = e => e.id + '|' + e.t;
+  const buscar = k => D.eventos.find(e => clave(e) === k);
+  const ref = e => ({ id: e.id, cal: e.cal, t: e.t });
+  // Con la etiqueta de la asignatura delante, el título no la repite («STE · 1er control» → «1er control»).
+  const sinAsig = e => e.asig && e.titulo.indexOf(e.asig + ' · ') === 0 ? e.titulo.slice(e.asig.length + 3) : e.titulo;
+
+  // ---------- Pantallas ----------
+
+  function pintar() {
+    if (!D) return;
+    $('nav').hidden = false;
+    $('mas').hidden = false;
+    document.querySelectorAll('[data-tab]').forEach(b => b.toggleAttribute('aria-current', b.dataset.tab === tab));
+    const hoy = hoyLocal();
+    if (tab === 'today') {
+      $('titulo').textContent = 'Today';
+      $('sub').textContent = fecha(hoy);
+      $('vista').innerHTML = vistaHoy(hoy);
+      const i = $('rapido');
+      if (i) i.oninput = () => previa(i.value, $('previa'));
+    } else if (tab === 'exams') {
+      const n = D.examenes.length;
+      $('titulo').textContent = 'Exams';
+      $('sub').textContent = n ? n + ' a la vista' : '';
+      $('vista').innerHTML = vistaExamenes();
+    } else {
+      const pend = D.tareas.filter(t => !t.hecha).length;
+      $('titulo').textContent = 'Tasks';
+      $('sub').textContent = pend ? pend + (pend === 1 ? ' pendiente' : ' pendientes') : '';
+      $('vista').innerHTML = vistaTareas(hoy);
+      const i = $('nuevaTarea');
+      if (i) i.oninput = () => previa(i.value, $('previaTarea'), true);
+    }
+  }
+
+  function vistaHoy(hoy) {
+    const ahora = Date.now();
+    const ayer = diaMas(hoy, -1);
+    const manana = diaMas(hoy, 1);
+    const delDia = D.eventos.filter(e => e.dia <= hoy && e.diaFin >= hoy);
+    const conHora = delDia.filter(e => !e.todoDia);
+    const enteros = delDia.filter(e => e.todoDia);
+    const actual = conHora.filter(e => e.t <= ahora && fin(e) > ahora).sort((a, b) => (a.tipo === 'trabajo') - (b.tipo === 'trabajo'))[0];
+    const siguiente = conHora.find(e => e.t > ahora);
+    const deManana = D.eventos.filter(e => e.dia === manana && !e.todoDia);
+    let html = '';
+
+    // Lo que toca ahora o lo siguiente, con su «cómo».
+    const heroe = actual || siguiente || deManana[0];
+    if (heroe) {
+      const cuando = heroe === actual ? 'Ahora · hasta ' + heroe.horaFin : heroe === siguiente ? 'Siguiente · ' + cuantoFalta(heroe.t) : 'Mañana · ' + heroe.hora;
+      const estudio = heroe.tipo === 'estudio';
+      html += `<article class="ahora ${estudio ? '' : 'otro'}">
+          <span class="eti">${cuando}</span>
+          <h2>${esc(heroe.titulo)}</h2>
+          <p>${heroe.hora}–${heroe.horaFin}${heroe.lugar ? ' · ' + esc(heroe.lugar) : ''}</p>
+          ${heroe.desc ? `<p class="como">${esc(heroe.desc)}</p>` : ''}
+          ${estudio && heroe.estado !== 'hecha' ? `<div class="fila"><button class="btn" data-act="hecha" data-ev="${esc(clave(heroe))}">Hecha</button>
+            <button class="btn sec" data-act="recolocar" data-ev="${esc(clave(heroe))}">No puedo, muévela</button></div>` : ''}
+          ${estudio && heroe.estado === 'hecha' ? `<p>✓ Hecha</p>` : ''}
+        </article>`;
+      if (heroe === actual && siguiente) html += `<p class="despues">Después: ${siguiente.hora} ${esc(siguiente.titulo)}</p>`;
+    } else {
+      html += `<article class="ahora otro"><span class="eti">Hoy</span><h2>Nada más en el calendario</h2></article>`;
+    }
+
+    // Sesiones de estudio que ya pasaron sin marcar.
+    const pend = D.eventos.filter(e => e.tipo === 'estudio' && e.estado !== 'hecha' && !e.todoDia && fin(e) <= ahora && e.dia >= ayer && e !== heroe);
+    pend.slice(0, 2).forEach(e => {
+      html += `<section class="tip"><p>¿Hiciste <b>${esc(e.titulo)}</b>? <span class="nota">(${e.dia === hoy ? 'hoy' : 'ayer'} ${e.hora})</span></p>
+        <div class="fila"><button class="btn" data-act="hecha" data-ev="${esc(clave(e))}">Sí, hecha</button>
+        <button class="btn sec" data-act="recolocar" data-ev="${esc(clave(e))}">No, muévela</button></div></section>`;
+    });
+
+    // Los exámenes de las dos próximas semanas (o el más cercano).
+    const exs = D.examenes.filter(x => x.tipo === 'examen');
+    const cerca = exs.filter(x => x.faltan <= 14).slice(0, 3);
+    (cerca.length ? cerca : exs.slice(0, 1)).forEach(ex => {
+      html += `<button class="meta" data-tab="exams">
+          <span class="n" style="color:${COLOR.examen}">${ex.faltan}<small>${ex.faltan === 1 ? 'día' : 'días'}</small></span>
+          <b>${ex.asig ? `<span class="asig">${esc(ex.asig)}</span>` : ''}${esc(sinAsig(ex))}</b>
+          ${ex.minTotal ? `<div class="barra"><span><em style="width:${Math.min(100, ex.minHechos / ex.minTotal * 100)}%"></em></span>${horas(ex.minHechos)} de ${horas(ex.minTotal)}</div>` : `<span class="nota">${fecha(ex.dia)}${ex.hora ? ' · ' + ex.hora : ''}</span>`}
+        </button>`;
+    });
+
+    // El día.
+    if (enteros.length) {
+      html += `<div class="pastillas">${enteros.map(e => `<button class="pastilla" data-act="ver" data-ev="${esc(clave(e))}"><i style="background:${COLOR[e.tipo] || COLOR.evento}"></i><span>${esc(e.titulo)}${e.diaFin > e.dia ? ' · hasta ' + fecha(e.diaFin) : ''}</span></button>`).join('')}</div>`;
+    }
+    if (conHora.length) {
+      let linea = false;
+      const items = [];
+      conHora.forEach(e => {
+        if (!linea && e.t > ahora) {
+          items.push(`<li class="linea"><span>${new Date().toTimeString().slice(0, 5)}</span></li>`);
+          linea = true;
+        }
+        items.push(filaEvento(e, fin(e) <= ahora));
+      });
+      if (!linea) items.push(`<li class="linea"><span>${new Date().toTimeString().slice(0, 5)}</span></li>`);
+      html += `<section><span class="eti">Hoy</span><ol class="dia">${items.join('')}</ol></section>`;
+    }
+
+    // Tareas para hoy o atrasadas.
+    const tareas = D.tareas.filter(t => !t.hecha && t.dia && t.dia <= hoy);
+    if (tareas.length) html += `<section class="grupo"><span class="eti">Tareas</span>${tareas.map(t => filaTarea(t, hoy)).join('')}</section>`;
+
+    // Mañana.
+    if (deManana.length) {
+      html += `<section><span class="eti">Mañana · ${fecha(manana)}</span><ol class="dia compacta">${deManana.slice(0, 8).map(e => filaEvento(e, false)).join('')}</ol></section>`;
+    }
+
+    html += `<form class="rapido" data-form="rapido"><input id="rapido" placeholder="Apunta algo: «estudiar STE el lunes a las 4»" aria-label="Apuntar un evento" autocomplete="off" enterkeyhint="send"><button aria-label="Apuntar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></form>
+      <p class="previa" id="previa"></p>`;
+    return html;
+  }
+
+  function filaEvento(e, pasado) {
+    const sub = e.tipo === 'estudio' ? primeraLinea(e.desc) : e.lugar;
+    return `<li><button class="${pasado ? 'pasado' : ''} ${e.tipo === 'estudio' ? 'estudio' : ''}" data-act="ver" data-ev="${esc(clave(e))}">
+        <time>${e.hora}</time><i style="background:${COLOR[e.tipo] || COLOR.evento}"></i>
+        <span style="min-width:0"><b>${esc(e.titulo)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>
+        <span class="ok">${e.estado === 'hecha' ? OK : ''}</span></button></li>`;
+  }
+
+  function vistaExamenes() {
+    if (!D.examenes.length) {
+      return `<p class="vacio">No hay exámenes ni entregas a la vista.</p>
+        <button class="btn ancho sec" data-act="nuevo" data-modo="examen">+ Examen o entrega</button>`;
+    }
+    return `<div class="examenes">${D.examenes.map(e => {
+      const k = e.id + '|' + e.t;
+      const color = COLOR[e.tipo];
+      const sin = e.tipo === 'examen' && e.asig && !e.minTotal;
+      return `<button class="ex" data-act="abrir" data-k="${esc(k)}">
+          <div class="n" style="color:${color}">${e.faltan}<small>${e.faltan === 1 ? 'día' : 'días'}</small></div>
+          <b>${e.asig ? `<span class="asig">${esc(e.asig)}</span>` : ''}${esc(sinAsig(e))}</b>
+          <span class="cuando">${fecha(e.dia)}${e.hora ? ' · ' + e.hora : ''}${e.lugar ? ' · ' + esc(e.lugar) : ''}</span>
+          ${e.minTotal ? `<div class="barra"><span><em style="width:${Math.min(100, e.minHechos / e.minTotal * 100)}%"></em></span>${horas(e.minHechos)} de ${horas(e.minTotal)}</div>` : ''}
+          ${e.prox ? `<div class="prox">Próxima: ${fecha(e.prox.dia)} · ${e.prox.hora}</div>` : sin ? `<div class="prox falta">Sin sesiones de estudio todavía</div>` : ''}
+          ${abierto === k && e.sesiones.length ? `<ul class="sesiones">${e.sesiones.map(s => `<li>
+              <span class="${s.hecha ? 'si' : s.pasada ? 'no' : ''}">${s.hecha ? '✓' : s.pasada ? '!' : '·'}</span>
+              <span>${fecha(s.dia)} ${s.hora}</span><em>${esc(sinAsig({ asig: e.asig, titulo: s.titulo }))}</em></li>`).join('')}</ul>` : ''}
+        </button>`;
+    }).join('')}</div>
+      <button class="btn ancho sec" data-act="nuevo" data-modo="examen">+ Examen o entrega</button>`;
+  }
+
+  function filaTarea(t, hoy) {
+    let nota = '';
+    if (!t.hecha && t.dia) nota = t.dia < hoy ? `<small class="vencida">Era para el ${fecha(t.dia)}</small>` : t.dia === hoy ? '' : `<small>${fecha(t.dia)}</small>`;
+    return `<div class="tarea ${t.hecha ? 'ok' : ''}"><button data-act="tarea" data-id="${esc(t.id)}"><span class="c">${t.hecha ? OK : ''}</span><span><b>${esc(t.titulo)}</b>${nota}</span></button>
+      <button class="quitar" data-act="borrarTarea" data-id="${esc(t.id)}" aria-label="Borrar tarea">${X}</button></div>`;
+  }
+
+  function vistaTareas(hoy) {
+    const grupos = [
+      ['Atrasadas', t => !t.hecha && t.dia && t.dia < hoy],
+      ['Hoy', t => !t.hecha && t.dia === hoy],
+      ['Próximas', t => !t.hecha && t.dia > hoy],
+      ['Sin fecha', t => !t.hecha && !t.dia],
+      ['Hechas', t => t.hecha],
+    ];
+    let html = `<form class="rapido" data-form="tarea"><input id="nuevaTarea" placeholder="Nueva tarea: «imprimir apuntes el lunes»" aria-label="Nueva tarea" autocomplete="off" enterkeyhint="done"><button aria-label="Añadir tarea"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></form>
+      <p class="previa" id="previaTarea"></p>`;
+    let alguna = false;
+    grupos.forEach(([nombre, f]) => {
+      const lista = D.tareas.filter(f);
+      if (!lista.length) return;
+      alguna = true;
+      html += `<section class="grupo"><span class="eti">${nombre}</span>${lista.map(t => filaTarea(t, hoy)).join('')}</section>`;
+    });
+    if (!alguna) html += '<p class="vacio">Nada pendiente.</p>';
+    return html;
+  }
+
+  // Lo que se va a apuntar, mientras se escribe.
+  function previa(texto, donde, comoTarea) {
+    if (!donde) return;
+    if (!texto.trim()) { donde.innerHTML = ''; return; }
+    const r = interpretar(texto, hoyLocal());
+    if (!r.titulo) { donde.innerHTML = ''; return; }
+    if (comoTarea || r.tarea) {
+      donde.innerHTML = `Tarea <b>${esc(r.titulo)}</b>${r.dia ? ' · ' + fecha(r.dia) : ''}`;
+      return;
+    }
+    const dia = r.dia || hoyLocal();
+    const cuando = r.diaFin ? fecha(dia) + ' – ' + fecha(r.diaFin) : r.hora ? fecha(dia) + ' · ' + r.hora + '–' + r.fin : fecha(dia) + ' · todo el día';
+    donde.innerHTML = `${NOMBRE[r.tipo] || 'Evento'} <b>${esc(r.titulo)}</b> · ${cuando}`;
+  }
+
+  // ---------- Hojas ----------
+
+  function abrirHoja(html) {
+    $('velo').innerHTML = `<div class="hoja" role="dialog" aria-modal="true">${html}</div>`;
+    $('velo').hidden = false;
+  }
+  function cerrarHoja() { $('velo').hidden = true; $('velo').innerHTML = ''; }
+
+  function verEvento(e) {
+    const cuando = e.todoDia
+      ? fecha(e.dia) + (e.diaFin > e.dia ? ' – ' + fecha(e.diaFin) : ' · todo el día')
+      : fecha(e.dia) + ' · ' + e.hora + '–' + e.horaFin;
+    const estudio = e.tipo === 'estudio' && !e.todoDia;
+    abrirHoja(`<span class="eti"><i style="display:inline-block;width:8px;height:8px;border-radius:4px;background:${COLOR[e.tipo] || COLOR.evento};margin-right:6px"></i>${NOMBRE[e.tipo] || 'Evento'}${e.asig ? ' · ' + esc(e.asig) : ''}</span>
+      <h3>${esc(e.titulo)}</h3>
+      <p class="cuando">${cuando}${e.lugar ? ' · ' + esc(e.lugar) : ''}</p>
+      ${e.desc ? `<p class="como">${esc(e.desc)}</p>` : ''}
+      ${estudio ? `<div class="fila">
+          <button class="btn" style="flex:1" data-act="${e.estado === 'hecha' ? 'deshacer' : 'hecha'}" data-ev="${esc(clave(e))}">${e.estado === 'hecha' ? 'Marcar como pendiente' : 'Hecha'}</button>
+          <button class="btn sec" style="flex:1" data-act="recolocar" data-ev="${esc(clave(e))}">Muévela</button></div>` : ''}
+      ${e.editable ? `<div class="fila">
+          <button class="btn peligro" style="flex:1" data-act="borrar" data-ev="${esc(clave(e))}">${e.serie ? 'Borrar solo este' : 'Borrar'}</button>
+          ${e.serie ? `<button class="btn peligro" style="flex:1" data-act="borrar" data-serie="1" data-ev="${esc(clave(e))}">Borrar toda la serie</button>` : ''}</div>` : ''}
+      <button class="btn sec ancho" data-act="cerrar">Cerrar</button>`);
+  }
+
+  let modo = 'evento';
+  let tipoMeta = 'examen';
+  function nuevo(m) {
+    modo = m || modo;
+    const hoy = hoyLocal();
+    const asigs = [...new Set(D.examenes.map(e => e.asig).concat(D.eventos.map(e => e.asig)).filter(Boolean))];
+    const pestañas = [['evento', 'Evento'], ['viaje', 'Viaje'], ['examen', 'Examen'], ['tarea', 'Tarea']];
+    let cuerpo = '';
+    if (modo === 'evento') {
+      cuerpo = `<input class="campo" id="nTexto" placeholder="«estudiar STE el sábado a las 5»" autocomplete="off">
+        <p class="previa" id="nPrevia" style="margin:0"></p>
+        <p class="nota">Escribe o dicta con el micro del teclado. Entiende el día, la hora, «@ lugar» y el tipo (estudiar, examen, entreno, cita…).</p>`;
+    } else if (modo === 'viaje') {
+      cuerpo = `<input class="campo" id="nTitulo" placeholder="Florencia, sortida del cau…" autocomplete="off">
+        <div class="dos"><label>Ida<input class="campo" type="date" id="nDia" value="${hoy}"></label><label>Vuelta<input class="campo" type="date" id="nFin" value="${hoy}"></label></div>
+        <p class="nota">Esos días no se te recolocará ninguna sesión de estudio.</p>`;
+    } else if (modo === 'examen') {
+      cuerpo = `<div class="chips">${[['examen', 'Examen'], ['entrega', 'Entrega']].map(([v, t]) => `<button type="button" data-act="tipoMeta" data-v="${v}" aria-pressed="${tipoMeta === v}">${t}</button>`).join('')}</div>
+        <input class="campo" id="nTitulo" placeholder="${tipoMeta === 'examen' ? '1er control, final…' : 'Informe práctica 3…'}" autocomplete="off">
+        <input class="campo" id="nAsig" placeholder="Asignatura (STE, MF, STM…)" list="asigs" autocomplete="off" autocapitalize="characters">
+        <datalist id="asigs">${asigs.map(a => `<option value="${esc(a)}">`).join('')}</datalist>
+        <div class="dos"><label>Día<input class="campo" type="date" id="nDia" value="${hoy}"></label><label>Hora (si la sabes)<input class="campo" type="time" id="nHora"></label></div>
+        <p class="nota">Con la asignatura, Plum cuenta las horas de estudio que llevas para ${tipoMeta === 'examen' ? 'este examen' : 'esta entrega'}.</p>`;
+    } else {
+      cuerpo = `<input class="campo" id="nTexto" placeholder="«imprimir apuntes el lunes»" autocomplete="off">
+        <p class="previa" id="nPrevia" style="margin:0"></p>`;
+    }
+    abrirHoja(`<form data-form="nuevo" style="display:contents">
+      <h3>Añadir</h3>
+      <div class="chips">${pestañas.map(([v, t]) => `<button type="button" data-act="modo" data-v="${v}" aria-pressed="${modo === v}">${t}</button>`).join('')}</div>
+      ${cuerpo}
+      <div class="fila"><button class="btn" style="flex:1">Guardar</button><button type="button" class="btn sec" data-act="cerrar">Cancelar</button></div>
+    </form>`);
+    const t = $('nTexto');
+    if (t) t.oninput = () => previa(t.value, $('nPrevia'), modo === 'tarea');
+    const foco = $('nTexto') || $('nTitulo');
+    if (foco) setTimeout(() => foco.focus(), 60);
+  }
+
+  async function guardarNuevo(boton) {
+    if (modo === 'evento' || modo === 'tarea') {
+      const texto = $('nTexto').value.trim();
+      if (!texto) return avisar('Escribe qué apuntar');
+      const r = interpretar(texto, hoyLocal());
+      if (modo === 'evento' && r.diaFin) {
+        return hacer('evento', { titulo: r.titulo, tipo: r.tipo, dia: r.dia, diaFin: r.diaFin, todoDia: true, lugar: r.lugar }, boton);
+      }
+      return hacer('rapido', { texto, tarea: modo === 'tarea' }, boton);
+    }
+    const titulo = $('nTitulo').value.trim();
+    if (!titulo) return avisar('Ponle un nombre');
+    if (modo === 'viaje') {
+      const dia = $('nDia').value, diaFin = $('nFin').value || dia;
+      if (diaFin < dia) return avisar('La vuelta es antes de la ida');
+      return hacer('evento', { titulo, tipo: 'viaje', dia, diaFin, todoDia: true }, boton);
+    }
+    const hora = $('nHora').value;
+    return hacer('evento', { titulo, tipo: tipoMeta, asig: $('nAsig').value.trim().toUpperCase(), dia: $('nDia').value, hora, todoDia: !hora, min: tipoMeta === 'examen' ? 120 : 30 }, boton);
+  }
+
+  // ---------- Toques ----------
+
+  document.addEventListener('click', e => {
+    if (e.target === $('velo')) return cerrarHoja();
+    const b = e.target.closest('[data-tab],[data-act]');
+    if (!b) return;
+    if (b.dataset.tab) {
+      tab = b.dataset.tab;
+      try { localStorage.setItem('plum.tab', tab); } catch (err) {}
+      $('vista').scrollTop = 0;
+      return pintar();
+    }
+    const a = b.dataset.act;
+    const ev = b.dataset.ev ? buscar(b.dataset.ev) : null;
+    if (a === 'reintentar') return cargar();
+    if (a === 'cerrar') return cerrarHoja();
+    if (a === 'ver' && ev) return verEvento(ev);
+    if (a === 'hecha' && ev) return hacer('estado', Object.assign(ref(ev), { estado: 'hecha' }), b);
+    if (a === 'deshacer' && ev) return hacer('estado', Object.assign(ref(ev), { estado: '' }), b);
+    if (a === 'recolocar' && ev) return hacer('recolocar', ref(ev), b);
+    if (a === 'borrar' && ev) {
+      // Dos toques para borrar: el primero avisa.
+      if (!b.classList.contains('seguro')) {
+        b.classList.add('seguro');
+        b.textContent = 'Toca otra vez para borrar';
+        return;
+      }
+      return hacer('borrar', Object.assign(ref(ev), { serie: !!b.dataset.serie }), b);
+    }
+    if (a === 'abrir') { abierto = abierto === b.dataset.k ? '' : b.dataset.k; return pintar(); }
+    if (a === 'nuevo') return nuevo(b.dataset.modo);
+    if (a === 'modo') return nuevo(b.dataset.v);
+    if (a === 'tipoMeta') { tipoMeta = b.dataset.v; return nuevo('examen'); }
+    if (a === 'tarea') return hacer('hecha', { id: b.dataset.id }, b);
+    if (a === 'borrarTarea') return hacer('borrarTarea', { id: b.dataset.id }, b);
+  });
+
+  $('mas').onclick = () => nuevo(tab === 'tasks' ? 'tarea' : tab === 'exams' ? 'examen' : 'evento');
+
+  document.addEventListener('submit', e => {
+    e.preventDefault();
+    const f = e.target.dataset.form;
+    const boton = e.target.querySelector('button:not([type=button])');
+    if (f === 'rapido') {
+      const texto = $('rapido').value.trim();
+      if (texto) hacer('rapido', { texto }, boton);
+    }
+    if (f === 'tarea') {
+      const texto = $('nuevaTarea').value.trim();
+      if (texto) hacer('rapido', { texto, tarea: true }, boton);
+    }
+    if (f === 'nuevo') guardarNuevo(boton);
+  });
+
+  // Al volver a la app después de un rato, se refresca sola.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && Date.now() - cargadoEn > 60000) cargar();
+  });
+  setInterval(() => { if (D && document.visibilityState === 'visible' && tab === 'today' && $('velo').hidden && document.activeElement.tagName !== 'INPUT') pintar(); }, 60000);
+
+  // Arranque: lo último guardado al momento y, detrás, lo de verdad.
+  if (!EN_GOOGLE && (!API || !K)) {
+    pantallaClave();
+  } else {
+    const cache = leerCache();
+    if (cache) { D = cache; pintar(); }
+    cargar();
+  }
+</script>
+</body>
+</html>

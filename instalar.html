@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Instalar Plum</title>
+<link rel="icon" type="image/png" href="icono-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; --bg: #0c0c0d; --card: #161618; --line: #2f2f34; --text: #f4f4f2; --muted: #9a9aa1; --acento: #c3a2ff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.5 'Space Grotesk', system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 20px 80px; }
+  .logo { width: 72px; height: 72px; border-radius: 18px; background: var(--acento); display: grid; place-items: center; }
+  h1 { font-size: 40px; letter-spacing: -.02em; margin: 18px 0 4px; }
+  h2 { font-size: 22px; margin: 36px 0 12px; }
+  .sub { color: var(--muted); margin: 0 0 28px; }
+  ol { list-style: none; padding: 0; margin: 0; counter-reset: paso; display: flex; flex-direction: column; gap: 12px; }
+  ol.dos { counter-reset: paso 6; }
+  li { counter-increment: paso; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px 20px 18px 66px; position: relative; }
+  li::before { content: counter(paso); position: absolute; left: 18px; top: 16px; width: 32px; height: 32px; border-radius: 10px; background: var(--acento); color: var(--bg); font-weight: 700; text-align: center; line-height: 32px; }
+  .nota { color: var(--muted); display: block; margin-top: 4px; font-size: 15px; }
+  a { color: var(--acento); }
+  code { background: #26262a; padding: 1px 6px; border-radius: 6px; font-size: 15px; }
+  button { margin-top: 12px; border: 0; border-radius: 12px; background: var(--acento); color: var(--bg); font: 700 16px 'Space Grotesk', sans-serif; padding: 12px 18px; cursor: pointer; }
+  button.hecho { background: var(--text); }
+  .aviso { margin-top: 28px; padding: 16px 20px; border-radius: 16px; border: 1px solid var(--line); color: var(--muted); font-size: 15px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="logo"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#0c0c0d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/><circle cx="15.5" cy="15.5" r="1.6" fill="#0c0c0d"/></svg></div>
+  <h1>Instalar Plum</h1>
+  <p class="sub">Parte 1 · en el ordenador, unos 5 minutos</p>
+  <ol>
+    <li>Entra en <a href="https://script.google.com" target="_blank">script.google.com</a> con tu cuenta de Google y pulsa <b>Nuevo proyecto</b>. Llámalo <b>Plum</b>.</li>
+    <li>Copia el código del servidor y pégalo en <code>Código.gs</code>, sustituyendo todo lo que haya (Ctrl+A y Ctrl+V).
+      <button type="button" data-archivo="servidor/codigo.txt">Copiar Código.gs</button></li>
+    <li>Pulsa <b>+</b> junto a «Archivos» → <b>HTML</b>, llámalo <code>Panel</code> y pega este segundo código.
+      <button type="button" data-archivo="servidor/panel.txt">Copiar Panel</button></li>
+    <li>Guarda (Ctrl+S). Arriba elige la función <b>configurar</b> y pulsa <b>Ejecutar</b>.
+      <span class="nota">Acepta los permisos: Configuración avanzada → Ir a Plum → Permitir. Pide ver y editar tu calendario. Abajo, en el registro, sale tu <b>Clave</b>: cópiala.</span></li>
+    <li><b>Implementar → Nueva implementación →</b> rueda dentada → <b>Aplicación web</b>. Ejecutar como: <b>Yo</b>. Quién tiene acceso: <b>Cualquier usuario</b>. Pulsa <b>Implementar</b>.</li>
+    <li>Abre la <b>URL de la aplicación web</b> y pega tu clave. Verás un <b>código QR</b> para el iPhone y te llegará un correo con tus dos enlaces.
+      <span class="nota">Pásale a Claude el segundo enlace (el que acaba en <code>/exec?k=…</code>): con él carga tu horario, tus exámenes y tu plan de estudio.</span></li>
+  </ol>
+  <h2>Parte 2 · en el iPhone</h2>
+  <ol class="dos">
+    <li>Escanea el QR con la cámara, abre el enlace en Safari y pulsa <b>Compartir → Añadir a pantalla de inicio</b>.</li>
+    <li>Para ver Plum también en el <b>Calendario del iPhone</b> y que suenen los avisos: <b>Ajustes → Calendario → Cuentas → Añadir cuenta → Google</b>, entra con tu cuenta y deja activado <b>Calendarios</b>.
+      <span class="nota">Tus eventos de iCloud siguen igual: el iPhone enseña los dos calendarios juntos.</span></li>
+  </ol>
+  <div class="aviso">Tus eventos van a <b>tu</b> Google Calendar y las tareas a una hoja de <b>tu</b> Google Drive. Nadie más los ve.</div>
+</main>
+<script>
+  document.querySelectorAll('[data-archivo]').forEach(b => {
+    b.addEventListener('click', async () => {
+      const texto = b.textContent;
+      try {
+        const r = await fetch(b.dataset.archivo, { cache: 'no-store' });
+        await navigator.clipboard.writeText(await r.text());
+        b.textContent = '¡Copiado! Ahora pégalo';
+        b.classList.add('hecho');
+      } catch (e) {
+        b.textContent = 'No se pudo copiar, prueba otra vez';
+      }
+      setTimeout(() => { b.textContent = texto; b.classList.remove('hecho'); }, 3500);
+    });
+  });
+</script>
+</body>
+</html>

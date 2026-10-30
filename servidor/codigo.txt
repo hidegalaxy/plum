@@ -1,0 +1,979 @@
+/**
+ * Plum: tu semana sobre Google Calendar. Horario fijo, sesiones de estudio con su «qué toca»,
+ * cuenta atrás de exámenes con las horas hechas, viajes y tareas.
+ *
+ * Una vez: pega este archivo y Panel.html en un proyecto de script.google.com,
+ * ejecuta configurar() y publícalo como aplicación web
+ * (Ejecutar como: yo · Quién tiene acceso: cualquier usuario).
+ * Al actualizar el código, vuelve a ejecutar configurar(): añade lo que falte sin tocar tus datos.
+ */
+
+const TZ = 'Europe/Madrid';
+
+// Los eventos viven en Google Calendar; la hoja solo guarda las tareas.
+const ESQUEMA = {
+  Tareas: ['id', 'titulo', 'dia', 'hecha', 'creada'],
+};
+// Tipos de evento: color en Google Calendar, duración por defecto y avisos (minutos antes).
+// En los de todo el día, 900 min antes = el día anterior a las 9:00. [] = sin avisos; null = los de tu calendario.
+const TIPOS = {
+  estudio: { nombre: 'Estudio', color: '3', min: 50, avisos: [5], avisosDia: [] },
+  examen: { nombre: 'Examen', color: '11', min: 120, avisos: [1440, 60], avisosDia: [900] },
+  entrega: { nombre: 'Entrega', color: '5', min: 60, avisos: [1440, 120], avisosDia: [900] },
+  clase: { nombre: 'Clase', color: '9', min: 60, avisos: [10], avisosDia: [] },
+  entreno: { nombre: 'Entreno', color: '6', min: 60, avisos: [], avisosDia: [] },
+  trabajo: { nombre: 'Trabajo', color: '8', min: 300, avisos: [], avisosDia: [] },
+  cau: { nombre: 'Cau', color: '2', min: 300, avisos: [60], avisosDia: [900] },
+  viaje: { nombre: 'Viaje o salida', color: '7', min: 60, avisos: [1440], avisosDia: [900] },
+  cita: { nombre: 'Cita', color: '4', min: 60, avisos: [60], avisosDia: [900] },
+  plan: { nombre: 'Plan', color: '10', min: 120, avisos: [60], avisosDia: [900] },
+  evento: { nombre: 'Evento', color: '1', min: 60, avisos: null, avisosDia: null },
+};
+// Etiquetas privadas que Plum pone en cada evento.
+const TAG = { tipo: 'plum', asig: 'plum.asig', estado: 'plum.estado', plan: 'plum.plan' };
+// Huecos donde se puede recolocar una sesión de estudio que no se hizo (1 = lunes … 7 = domingo).
+// El plan que manda Claude puede cambiarlos (se guardan en la propiedad VENTANAS).
+const VENTANAS = {
+  1: [['15:00', '20:00']],
+  2: [['14:45', '15:45']],
+  3: [['15:30', '20:00']],
+  4: [['14:45', '15:45']],
+  5: [['15:30', '20:00']],
+  6: [['16:30', '20:00']],
+  7: [['10:00', '13:00'], ['17:00', '20:00']],
+};
+const DIAS_SEMANA = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+// Días hacia delante en los que se buscan exámenes y entregas, y hacia atrás para contar sesiones hechas.
+const DIAS_CUENTA = 150;
+const DIAS_ATRAS = 45;
+// La app (panel) que se instala en el iPhone. Habla con este servidor por su dirección ?api=.
+const WEB = 'https://hidegalaxy.github.io/plum/';
+
+// Crea o completa la hoja "Plum" y la clave. Se puede repetir sin miedo.
+function configurar() {
+  const props = PropertiesService.getScriptProperties();
+  // Una copia de otro proyecto puede traer la hoja de su dueño: si no se puede abrir, se empieza de cero.
+  if (props.getProperty('HOJA')) {
+    try {
+      SpreadsheetApp.openById(props.getProperty('HOJA'));
+    } catch (err) {
+      ['HOJA', 'CLAVE', 'VER', 'ESCRIBIR', 'VENTANAS'].forEach(p => props.deleteProperty(p));
+    }
+  }
+  if (!props.getProperty('HOJA')) {
+    const nuevo = SpreadsheetApp.create('Plum');
+    nuevo.setSpreadsheetTimeZone(TZ);
+    nuevo.setSpreadsheetLocale('es_ES');
+    nuevo.getSheets()[0].setName('Tareas');
+    props.setProperty('HOJA', nuevo.getId());
+  }
+  const ss = libro_();
+  Object.keys(ESQUEMA).forEach(nombre => {
+    const h = ss.getSheetByName(nombre) || ss.insertSheet(nombre);
+    const ultima = h.getLastColumn();
+    const cab = ultima ? h.getRange(1, 1, 1, ultima).getValues()[0].map(String) : [];
+    const faltan = ESQUEMA[nombre].filter(c => cab.indexOf(c) < 0);
+    if (faltan.length) h.getRange(1, cab.length + 1, 1, faltan.length).setValues([faltan]);
+    h.setFrozenRows(1);
+  });
+  // Pide permiso al calendario ya ahora y apunta cuál es el tuyo.
+  const cal = CalendarApp.getDefaultCalendar();
+  if (!props.getProperty('ESCRIBIR')) props.setProperty('ESCRIBIR', cal.getId());
+  if (!props.getProperty('CLAVE')) {
+    props.setProperty('CLAVE', Utilities.getUuid().replace(/-/g, '').slice(0, 16));
+  }
+  CacheService.getScriptCache().remove('calendarios');
+  tocado_();
+  Logger.log('Calendario: ' + cal.getName());
+  Logger.log('Hoja: ' + ss.getUrl());
+  Logger.log('Clave: ' + props.getProperty('CLAVE'));
+}
+
+// ---------- Web ----------
+
+// GET ?k=CLAVE                         → panel
+// GET ?k=CLAVE&accion=hoy[&dia=manana] → resumen del día en texto (atajo «Hoy» y Siri)
+// GET ?k=CLAVE&accion=datos            → datos del panel en JSON (para la web propia)
+// GET (sin clave) o ?accion=instalar   → página para instalar Plum en el iPhone
+function doGet(e) {
+  const p = e.parameter;
+  if (p.accion === 'instalar' || (!p.k && !p.accion)) return paginaInstalar_(p.k);
+  if (!claveValida_(p.k)) return p.accion === 'datos' ? json_({ error: 'Clave incorrecta' }) : texto_('Clave incorrecta');
+  if (p.accion === 'hoy') return texto_(resumenDia_(/^(manana|mañana|dema|demà)$/i.test(p.dia || '') ? 1 : 0));
+  if (p.accion === 'datos') {
+    try {
+      return json_(datos_());
+    } catch (err) {
+      return json_({ error: err.message });
+    }
+  }
+  const t = HtmlService.createTemplateFromFile('Panel');
+  t.clave = p.k;
+  return t.evaluate()
+    .setTitle('Plum')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
+}
+
+// POST { k, texto } desde el atajo → mensaje para la notificación.
+// POST { api: 'accion', k, que, d } desde el panel o desde Claude (plan) → JSON.
+function doPost(e) {
+  let crudo;
+  try {
+    crudo = JSON.parse(e.postData.contents);
+  } catch (err) {
+    crudo = e.parameter;
+  }
+  // Claves sin mayúsculas ni espacios: "Texto " del atajo vale igual que "texto".
+  const d = {};
+  Object.keys(crudo || {}).forEach(c => { d[String(c).trim().toLowerCase()] = crudo[c]; });
+  // Los atajos llevan la clave en la dirección (…/exec?k=CLAVE) y no en el JSON.
+  if (!d.k && e.parameter && e.parameter.k) d.k = e.parameter.k;
+  if (d.api === 'accion') {
+    try {
+      return json_(accion(d.k, d.que, d.d));
+    } catch (err) {
+      return json_({ error: err.message });
+    }
+  }
+  if (!claveValida_(d.k)) return texto_('❌ Clave incorrecta');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    if (d.texto != null && String(d.texto).trim()) return texto_(rapido_(String(d.texto), d.tarea));
+    return texto_(crearEvento_(d));
+  } catch (err) {
+    return texto_('❌ ' + err.message);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ---------- Instalación ----------
+
+// Lo que se ve al abrir la dirección del servidor recién publicado: pide la clave y, con ella,
+// enseña el QR para abrir Plum en el iPhone y manda los enlaces por correo.
+function paginaInstalar_(k) {
+  const exec = ScriptApp.getService().getUrl();
+  const ok = claveValida_(k);
+  const enlaceApp = WEB + '?api=' + idDe_(exec) + '&k=' + encodeURIComponent(k || '');
+  const enlaceAtajos = exec + '?k=' + encodeURIComponent(k || '');
+  if (ok) enviarEnlaces_(enlaceApp, enlaceAtajos);
+
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const cuerpo = ok
+    ? '<h1>¡Tu Plum está lista!</h1>' +
+      '<p>Escanea este código con la <b>cámara del iPhone</b> y abre el enlace en Safari.<br><i>Escaneja aquest codi amb la càmera de l\'iPhone i obre l\'enllaç a Safari.</i></p>' +
+      '<div id="qr"></div>' +
+      '<p class="peq">También te lo hemos enviado por correo. · <i>També te l\'hem enviat per correu.</i></p>' +
+      '<p class="peq">Dirección para los atajos y para Claude · <i>Adreça per a les dreceres i per a Claude</i>:</p><input readonly value="' + esc(enlaceAtajos) + '" onclick="this.select()">' +
+      '<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>' +
+      '<script>new QRCode(document.getElementById("qr"), { text: ' + JSON.stringify(enlaceApp) + ', width: 260, height: 260, colorDark: "#0c0c0d", colorLight: "#ffffff" });</script>'
+    : '<h1>Instalar Plum</h1>' +
+      '<p>Pega la <b>clave</b> que salió en el registro al ejecutar <b>configurar</b>.<br><i>Enganxa la clau que va sortir al registre en executar configurar.</i></p>' +
+      (k ? '<p class="mal">Esa clave no es correcta. · <i>Aquesta clau no és correcta.</i></p>' : '') +
+      '<form method="get" action="' + esc(exec) + '" target="_top"><input type="hidden" name="accion" value="instalar">' +
+      '<input name="k" placeholder="Clave · Clau" autocomplete="off" required><button>Continuar</button></form>';
+  const html = '<!doctype html><html lang="es"><head><meta charset="utf-8"><style>' +
+    'body{margin:0;background:#0c0c0d;color:#f4f4f2;font:17px/1.45 system-ui,-apple-system,sans-serif;display:flex;justify-content:center}' +
+    'main{max-width:460px;padding:40px 24px;text-align:center}h1{font-size:30px;margin:18px 0 10px}' +
+    '.logo{width:84px;height:84px;border-radius:20px;background:#c3a2ff;margin:0 auto;display:flex;align-items:center;justify-content:center}' +
+    '#qr{display:inline-block;background:#fff;padding:16px;border-radius:18px;margin:14px 0}i{color:#9a9aa1}.peq{font-size:14px}.mal{color:#ff6b5e}' +
+    'input{width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;border:1px solid #2f2f34;background:#161618;color:#f4f4f2;font-size:15px;margin:8px 0}' +
+    'button{width:100%;padding:14px;border:0;border-radius:14px;background:#c3a2ff;color:#0c0c0d;font-weight:700;font-size:17px;cursor:pointer}' +
+    '</style></head><body><main><div class="logo">' + LOGO_SVG_ + '</div>' + cuerpo + '</main></body></html>';
+  return HtmlService.createHtmlOutput(html).setTitle('Instalar Plum')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+const LOGO_SVG_ = '<svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="#0c0c0d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/><circle cx="15.5" cy="15.5" r="1.6" fill="#0c0c0d"/></svg>';
+
+// Como mucho un correo cada 10 minutos, aunque se recargue la página.
+function enviarEnlaces_(enlaceApp, enlaceAtajos) {
+  const props = PropertiesService.getScriptProperties();
+  const antes = Number(props.getProperty('ENLACES_ENVIADOS') || 0);
+  if (Date.now() - antes < 10 * 60000) return;
+  props.setProperty('ENLACES_ENVIADOS', String(Date.now()));
+  MailApp.sendEmail(
+    Session.getEffectiveUser().getEmail(),
+    'Tus enlaces de Plum',
+    '1) Abre esto en el iPhone (Safari) y añádelo a la pantalla de inicio:\n\n' + enlaceApp + '\n\n' +
+    '2) Dirección para los atajos y para que Claude cargue tu plan:\n\n' + enlaceAtajos + '\n\n' +
+    'No compartas estos enlaces con nadie más: llevan tu clave.'
+  );
+}
+
+function idDe_(exec) {
+  return (String(exec || '').match(/\/s\/([\w-]+)\//) || [])[1] || '';
+}
+
+// ---------- Llamadas del panel ----------
+
+function datos(k) {
+  comprobar_(k);
+  return datos_();
+}
+
+// Todas las escrituras pasan por aquí y devuelven los datos ya actualizados.
+function accion(k, que, d) {
+  comprobar_(k);
+  if (!ACCIONES_[que]) throw new Error('Acción desconocida: ' + que);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  let msg;
+  try {
+    msg = ACCIONES_[que](d || {});
+  } finally {
+    lock.releaseLock();
+  }
+  return { msg: msg || '', datos: datos_() };
+}
+
+const ACCIONES_ = {
+  rapido: d => rapido_(String(d.texto || ''), d.tarea),
+  evento: d => crearEvento_(d),
+  borrar: d => {
+    const ev = buscarEvento_(d);
+    if (d.serie && ev.isRecurringEvent()) {
+      ev.getEventSeries().deleteEventSeries();
+      tocado_();
+      return 'Borrada toda la serie';
+    }
+    ev.deleteEvent();
+    tocado_();
+    return 'Borrado';
+  },
+  // Sesión hecha (o deshacer): cuenta para las horas del examen.
+  estado: d => {
+    const ev = buscarEvento_(d);
+    const hecha = d.estado === 'hecha';
+    ev.setTag(TAG.estado, hecha ? 'hecha' : '');
+    tocado_();
+    return hecha ? '¡Hecha! Cuenta para el examen' : 'Marcada como pendiente';
+  },
+  // Lleva la sesión al siguiente hueco libre (antes de su examen, si lo tiene).
+  recolocar: d => recolocar_(buscarEvento_(d)),
+  // Claude manda un plan entero: borra lo que quedaba pendiente de ese plan y lo crea de nuevo.
+  plan: d => cargarPlan_(d),
+
+  tarea: d => crearTarea_(d.titulo, d.dia),
+  hecha: d => {
+    const fila = leer_('Tareas').find(r => String(r.id) === d.id);
+    if (!fila) throw new Error('No encuentro esa tarea');
+    const ya = !!fila.hecha;
+    actualizar_('Tareas', fila._fila, { hecha: ya ? '' : new Date() });
+    return ya ? 'Tarea pendiente otra vez' : '¡Hecha!';
+  },
+  borrarTarea: d => { borrarDonde_('Tareas', r => String(r.id) === d.id); return 'Tarea borrada'; },
+};
+
+// ---------- Eventos ----------
+
+// Una frase («estudiar STE el lunes a las 5») → evento o tarea, con mensaje para la notificación.
+function rapido_(texto, forzarTarea) {
+  const ahora = new Date();
+  const hoy = diaDe_(ahora);
+  const r = interpretar(texto, hoy);
+  if (!r.titulo) throw new Error('No entiendo qué apuntar');
+  if (r.tarea || forzarTarea) return crearTarea_(r.titulo, r.dia);
+  // Sin día: hoy, o mañana si la hora ya ha pasado.
+  if (!r.dia) r.dia = r.hora && r.hora <= horaDe_(ahora) ? diaMas_(hoy, 1) : hoy;
+  return crearEvento_(r);
+}
+
+// d: { titulo, tipo, dia, diaFin, hora, min, todoDia, lugar, desc, asig, plan, avisos: [min], repetir: 'semana', hasta }
+function crearEvento_(d) {
+  const titulo = limpiar_(d.titulo);
+  if (!titulo) throw new Error('Pon un título');
+  const tipo = TIPOS[d.tipo] ? d.tipo : 'evento';
+  const momento = momento_(d, tipo);
+  const cal = calEscribir_();
+  const opciones = {};
+  if (d.lugar) opciones.location = limpiar_(d.lugar);
+  if (d.desc) opciones.description = String(d.desc);
+  let ev;
+  if (d.repetir === 'semana') {
+    const hasta = diaValido_(d.hasta) || diaMas_(momento.dia, 7 * 15);
+    if (hasta < momento.dia) throw new Error('La fecha final de la repetición es anterior al primer día');
+    const regla = CalendarApp.newRecurrence().addWeeklyRule().until(Utilities.parseDate(hasta + ' 23:59', TZ, 'yyyy-MM-dd HH:mm'));
+    ev = momento.todoDia
+      ? cal.createAllDayEventSeries(titulo, momento.ini, regla, opciones)
+      : cal.createEventSeries(titulo, momento.ini, momento.fin, regla, opciones);
+  } else if (momento.todoDia) {
+    ev = momento.diaFin > momento.dia
+      ? cal.createAllDayEvent(titulo, momento.ini, Utilities.parseDate(diaMas_(momento.diaFin, 1) + ' 00:00', TZ, 'yyyy-MM-dd HH:mm'), opciones)
+      : cal.createAllDayEvent(titulo, momento.ini, opciones);
+  } else {
+    ev = cal.createEvent(titulo, momento.ini, momento.fin, opciones);
+  }
+  ponerTipo_(ev, tipo, momento.todoDia, true, Array.isArray(d.avisos) ? d.avisos : null);
+  if (d.asig) ev.setTag(TAG.asig, limpiar_(d.asig));
+  if (d.plan) ev.setTag(TAG.plan, String(d.plan));
+  tocado_();
+  const cuando = fechaCorta_(momento.dia) +
+    (momento.todoDia ? (momento.diaFin > momento.dia ? ' – ' + fechaCorta_(momento.diaFin) : '') : ', ' + momento.hora + '–' + horaDe_(momento.fin));
+  const faltan = diasEntre_(diaDe_(new Date()), momento.dia);
+  const falta = faltan === 0 ? 'hoy' : faltan === 1 ? 'mañana' : faltan > 1 ? 'en ' + faltan + ' días' : '';
+  const rep = d.repetir === 'semana' ? ' · cada semana' : '';
+  return '✅ ' + titulo + ' · ' + cuando + rep + (falta ? ' (' + falta + ')' : '');
+}
+
+// Del formulario a fechas: { dia, diaFin, hora, ini: Date, fin: Date, todoDia }.
+function momento_(d, tipo) {
+  const dia = diaValido_(d.dia);
+  if (!dia) throw new Error('Pon una fecha');
+  const todoDia = d.todoDia === true || d.todoDia === 'true' || d.todoDia === 'on' || !d.hora;
+  if (todoDia) {
+    const diaFin = diaValido_(d.diaFin) || dia;
+    if (diaFin < dia) throw new Error('La vuelta es antes de la ida');
+    return { dia, diaFin, hora: '', todoDia: true, ini: Utilities.parseDate(dia + ' 00:00', TZ, 'yyyy-MM-dd HH:mm') };
+  }
+  const hora = String(d.hora).trim();
+  if (!/^\d{1,2}:\d{2}$/.test(hora)) throw new Error('Hora no válida');
+  const min = Math.max(5, Math.min(24 * 60, Math.round(numero_(d.min)) || TIPOS[tipo].min));
+  const ini = Utilities.parseDate(dia + ' ' + hora, TZ, 'yyyy-MM-dd HH:mm');
+  return { dia, diaFin: dia, hora: hora.padStart(5, '0'), todoDia: false, ini, fin: new Date(ini.getTime() + min * 60000) };
+}
+
+// Marca el tipo en el evento (color, etiqueta privada y avisos). Los avisos solo se cambian si se pide.
+function ponerTipo_(ev, tipo, todoDia, conAvisos, avisosPropios) {
+  const t = TIPOS[tipo];
+  ev.setTag(TAG.tipo, tipo);
+  ev.setColor(t.color);
+  const avisos = avisosPropios || (todoDia ? t.avisosDia : t.avisos);
+  if (conAvisos && avisos) {
+    ev.removeAllReminders();
+    avisos.forEach(m => ev.addPopupReminder(m));
+  }
+}
+
+// El panel identifica un evento por su id, su calendario y su inicio (los de una serie comparten id).
+function buscarEvento_(d) {
+  const cal = CalendarApp.getCalendarById(String(d.cal || ''));
+  if (!cal) throw new Error('No encuentro ese calendario');
+  const t = Number(d.t);
+  const cerca = t ? cal.getEvents(new Date(t - 60000), new Date(t + 60000)).filter(e => e.getId() === d.id) : [];
+  const ev = cerca.find(e => inicio_(e).getTime() === t) || cerca[0] || cal.getEventById(d.id);
+  if (!ev) throw new Error('Ese evento ya no existe');
+  return ev;
+}
+
+// ---------- Plan de Claude ----------
+
+// d: { plan: 'ste-1', eventos: [...como crearEvento_], ventanas?: {1: [['15:00','20:00']], …} }
+// Borra del calendario lo que había de ese plan y crea lo nuevo. Las sesiones ya hechas se quedan como están
+// y no se vuelven a crear.
+function cargarPlan_(d) {
+  const plan = String(d.plan || '').trim();
+  if (!/^[\w.-]{1,40}$/.test(plan)) throw new Error('Falta el nombre del plan');
+  const lista = [].concat(d.eventos || []);
+  if (lista.length > 300) throw new Error('Demasiados eventos de una vez');
+  if (d.ventanas) PropertiesService.getScriptProperties().setProperty('VENTANAS', JSON.stringify(d.ventanas));
+  const hoy = diaDe_(new Date());
+  const primero = lista.map(e => diaValido_(e.dia)).filter(Boolean).reduce((a, b) => (b < a ? b : a), hoy);
+  const cal = calEscribir_();
+  const desde = Utilities.parseDate(diaMas_(primero, -1) + ' 00:00', TZ, 'yyyy-MM-dd HH:mm');
+  const hasta = Utilities.parseDate(diaMas_(hoy, 400) + ' 00:00', TZ, 'yyyy-MM-dd HH:mm');
+  const series = {};
+  const hechas = {};
+  let borrados = 0;
+  cal.getEvents(desde, hasta).forEach(ev => {
+    if (ev.getTag(TAG.plan) !== plan) return;
+    if (ev.getTag(TAG.estado) === 'hecha') {
+      hechas[ev.getTitle() + '|' + diaDe_(inicio_(ev))] = true;
+      return;
+    }
+    if (ev.isRecurringEvent()) {
+      if (series[ev.getId()]) return;
+      series[ev.getId()] = true;
+      ev.getEventSeries().deleteEventSeries();
+    } else {
+      ev.deleteEvent();
+    }
+    borrados++;
+  });
+  let creados = 0;
+  const errores = [];
+  lista.forEach((e, i) => {
+    if (hechas[limpiar_(e.titulo) + '|' + e.dia]) return;
+    try {
+      crearEvento_(Object.assign({}, e, { plan }));
+      creados++;
+    } catch (err) {
+      errores.push((i + 1) + ' «' + (e.titulo || '') + '»: ' + err.message);
+    }
+  });
+  tocado_();
+  const nHechas = Object.keys(hechas).length;
+  return 'Plan «' + plan + '»: ' + creados + ' creados, ' + borrados + ' sustituidos' + (nHechas ? ', ' + nHechas + ' hechas sin tocar' : '') +
+    (errores.length ? '. Fallaron: ' + errores.join('; ') : '');
+}
+
+function ventanas_() {
+  try {
+    const v = JSON.parse(PropertiesService.getScriptProperties().getProperty('VENTANAS') || 'null');
+    if (v) return v;
+  } catch (err) {}
+  return VENTANAS;
+}
+
+// Busca el primer hueco libre del mismo largo en tus ventanas de estudio, desde ahora y como mucho 21 días.
+// Si la sesión es de una asignatura con examen pendiente, el hueco tiene que ser antes del examen.
+function recolocar_(ev) {
+  if (ev.isAllDayEvent()) throw new Error('Solo se recolocan sesiones con hora');
+  const min = Math.round((ev.getEndTime() - ev.getStartTime()) / 60000);
+  const asig = ev.getTag(TAG.asig) || '';
+  const ahora = new Date();
+  const hoy = diaDe_(ahora);
+  let limite = Utilities.parseDate(diaMas_(hoy, 21) + ' 00:00', TZ, 'yyyy-MM-dd HH:mm').getTime();
+  if (asig) {
+    const ex = cuenta_(hoy).find(e => e.asig === asig && e.tipo === 'examen' && e.t > ahora.getTime());
+    if (ex) limite = Math.min(limite, ex.t);
+  }
+  // Ocupado: todo lo que tiene hora (menos la propia sesión) y los días enteros de viaje.
+  const evs = eventos_(hoy, diaMas_(hoy, 22));
+  const ocupado = evs.filter(e => !e.todoDia && !(e.id === ev.getId() && e.t === ev.getStartTime().getTime()))
+    .map(e => [e.t, e.t + e.min * 60000]);
+  const diasViaje = {};
+  evs.filter(e => e.todoDia && e.tipo === 'viaje').forEach(e => {
+    for (let x = e.dia; x <= e.diaFin; x = diaMas_(x, 1)) diasViaje[x] = true;
+  });
+  const v = ventanas_();
+  const desdeYa = Math.ceil((ahora.getTime() + 15 * 60000) / (15 * 60000)) * 15 * 60000;
+  for (let n = 0; n <= 21; n++) {
+    const dia = diaMas_(hoy, n);
+    if (diasViaje[dia]) continue;
+    const franjas = v[diaSemana_(dia)] || v[String(diaSemana_(dia))] || [];
+    for (const [a, b] of franjas) {
+      const ini0 = Utilities.parseDate(dia + ' ' + a, TZ, 'yyyy-MM-dd HH:mm').getTime();
+      const finF = Utilities.parseDate(dia + ' ' + b, TZ, 'yyyy-MM-dd HH:mm').getTime();
+      let t = Math.max(ini0, desdeYa);
+      while (t + min * 60000 <= finF && t + min * 60000 <= limite) {
+        const choca = ocupado.find(([x, y]) => x < t + min * 60000 && y > t);
+        if (!choca) {
+          ev.setTime(new Date(t), new Date(t + min * 60000));
+          ev.setTag(TAG.estado, '');
+          tocado_();
+          return 'Movida al ' + fechaCorta_(dia) + ', ' + horaDe_(new Date(t));
+        }
+        t = Math.ceil(choca[1] / (15 * 60000)) * 15 * 60000;
+      }
+    }
+  }
+  throw new Error(limite < Infinity && asig ? 'No queda hueco antes del examen: muévela a mano' : 'No encuentro hueco en las próximas 3 semanas');
+}
+
+// ---------- Lectura de eventos ----------
+
+// Eventos de los calendarios elegidos entre dos días (desde incluido, hasta excluido), ya listos para el panel.
+function eventos_(desde, hasta) {
+  const ini = Utilities.parseDate(desde + ' 00:00', TZ, 'yyyy-MM-dd HH:mm');
+  const fin = Utilities.parseDate(hasta + ' 00:00', TZ, 'yyyy-MM-dd HH:mm');
+  const cals = calendarios_().filter(c => c.ver);
+  const out = [];
+  cals.forEach(c => {
+    const cal = CalendarApp.getCalendarById(c.id);
+    if (!cal) return;
+    cal.getEvents(ini, fin).forEach(ev => out.push(evento_(ev, c)));
+  });
+  return out.sort((a, b) => a.t - b.t || (b.todoDia ? 1 : 0) - (a.todoDia ? 1 : 0));
+}
+
+function evento_(ev, c) {
+  const todoDia = ev.isAllDayEvent();
+  const ini = inicio_(ev);
+  let dia, diaFin, hora = '', horaFin = '', min = 0;
+  if (todoDia) {
+    dia = diaDe_(ev.getAllDayStartDate());
+    diaFin = diaMas_(diaDe_(ev.getAllDayEndDate()), -1);
+    if (diaFin < dia) diaFin = dia;
+  } else {
+    const fin = ev.getEndTime();
+    dia = diaDe_(ini);
+    hora = horaDe_(ini);
+    horaFin = horaDe_(fin);
+    min = Math.round((fin - ini) / 60000);
+    // Un evento que acaba justo a medianoche no ocupa el día siguiente.
+    diaFin = diaDe_(new Date(fin.getTime() - 1));
+    if (diaFin < dia) diaFin = dia;
+  }
+  return {
+    id: ev.getId(), cal: c.id, editable: c.propio,
+    titulo: String(ev.getTitle() || '(sin título)'), lugar: String(ev.getLocation() || ''),
+    desc: String(ev.getDescription() || '').slice(0, 600),
+    t: ini.getTime(), dia, diaFin, hora, horaFin, min, todoDia,
+    tipo: tipoDe_(ev, c.nombre), serie: ev.isRecurringEvent(),
+    asig: String(ev.getTag(TAG.asig) || ''), estado: String(ev.getTag(TAG.estado) || ''),
+  };
+}
+
+function inicio_(ev) {
+  return ev.isAllDayEvent() ? ev.getAllDayStartDate() : ev.getStartTime();
+}
+
+// El tipo guardado por Plum (o por Ciruela) o, en eventos de fuera, el que se deduce del título.
+function tipoDe_(ev, nombreCal) {
+  const tag = ev.getTag(TAG.tipo) || ev.getTag('ciruela');
+  if (tag && TIPOS[tag]) return tag;
+  if (/festiv|holiday|festius/i.test(nombreCal || '')) return 'festivo';
+  return interpretar(ev.getTitle() || '', '2000-01-01').tipo;
+}
+
+// Calendarios de la cuenta con lo que se ve y dónde se escribe. Se guarda una hora en caché.
+function calendarios_() {
+  const cache = CacheService.getScriptCache();
+  let lista = null;
+  try { lista = JSON.parse(cache.get('calendarios') || 'null'); } catch (err) {}
+  if (!lista) {
+    lista = CalendarApp.getAllCalendars().map(c => ({
+      id: c.getId(), nombre: c.getName(), propio: c.isOwnedByMe(),
+      visible: !c.isHidden() && c.isSelected(),
+    }));
+    cache.put('calendarios', JSON.stringify(lista), 3600);
+  }
+  const props = PropertiesService.getScriptProperties();
+  let ver = null;
+  try { ver = JSON.parse(props.getProperty('VER') || 'null'); } catch (err) {}
+  const escribir = props.getProperty('ESCRIBIR') || '';
+  return lista.map(c => ({
+    id: c.id, nombre: c.nombre, propio: c.propio,
+    ver: ver ? ver.indexOf(c.id) >= 0 : (c.visible || c.id === escribir),
+    escribir: c.id === escribir,
+  }));
+}
+
+function calEscribir_() {
+  const id = PropertiesService.getScriptProperties().getProperty('ESCRIBIR');
+  return (id && CalendarApp.getCalendarById(id)) || CalendarApp.getDefaultCalendar();
+}
+
+// La cuenta atrás mira medio año: se guarda unos minutos y se borra al escribir.
+function tocado_() {
+  CacheService.getScriptCache().remove('cuenta');
+}
+
+// Exámenes y entregas que vienen, cada uno con las horas de estudio de su asignatura (hechas y planeadas).
+function cuenta_(hoy) {
+  const cache = CacheService.getScriptCache();
+  try {
+    const c = JSON.parse(cache.get('cuenta') || 'null');
+    if (c && c.hoy === hoy) return c.lista;
+  } catch (err) {}
+  const todos = eventos_(diaMas_(hoy, -DIAS_ATRAS), diaMas_(hoy, DIAS_CUENTA));
+  const ahora = Date.now();
+  const metas = todos.filter(e => (e.tipo === 'examen' || e.tipo === 'entrega') && e.diaFin >= hoy);
+  const lista = metas.map((e, i) => {
+    // Las sesiones de una asignatura cuentan para su primer examen pendiente; las de después, para el siguiente.
+    const anterior = metas.slice(0, i).filter(x => x.tipo === 'examen' && x.asig && x.asig === e.asig).pop();
+    const sesiones = e.asig && e.tipo === 'examen' ? todos.filter(s => s.tipo === 'estudio' && s.asig === e.asig && s.t < e.t && (!anterior || s.t >= anterior.t)) : [];
+    const hechas = sesiones.filter(s => s.estado === 'hecha');
+    const prox = sesiones.find(s => s.estado !== 'hecha' && s.t + s.min * 60000 > ahora);
+    return {
+      id: e.id, cal: e.cal, t: e.t, titulo: e.titulo, tipo: e.tipo, asig: e.asig, lugar: e.lugar, desc: e.desc,
+      dia: e.dia, hora: e.hora, todoDia: e.todoDia, faltan: diasEntre_(hoy, e.dia),
+      minHechos: hechas.reduce((s, x) => s + x.min, 0),
+      minTotal: sesiones.reduce((s, x) => s + x.min, 0),
+      prox: prox ? { dia: prox.dia, hora: prox.hora, titulo: prox.titulo } : null,
+      sesiones: sesiones.map(s => ({ dia: s.dia, hora: s.hora, min: s.min, titulo: s.titulo, hecha: s.estado === 'hecha', pasada: s.t + s.min * 60000 <= ahora })),
+    };
+  });
+  try { cache.put('cuenta', JSON.stringify({ hoy, lista }), 600); } catch (err) {}
+  return lista;
+}
+
+// ---------- Tareas ----------
+
+function crearTarea_(titulo, dia) {
+  titulo = limpiar_(titulo);
+  if (!titulo) throw new Error('Pon qué tienes que hacer');
+  dia = diaValido_(dia);
+  anadir_('Tareas', { id: nuevoId_('t'), titulo, dia, hecha: '', creada: new Date() });
+  return '✅ Tarea: ' + titulo + (dia ? ' · para el ' + fechaCorta_(dia) : '');
+}
+
+// Pendientes y las hechas en la última semana.
+function tareas_(hoy) {
+  const limite = diaMas_(hoy, -7);
+  return leer_('Tareas').map(r => ({
+    id: String(r.id), titulo: String(r.titulo),
+    dia: r.dia instanceof Date ? diaDe_(r.dia) : String(r.dia || ''),
+    hecha: r.hecha ? diaDe_(new Date(r.hecha)) : '',
+  })).filter(t => !t.hecha || t.hecha >= limite)
+    .sort((a, b) => (a.dia || '9999') < (b.dia || '9999') ? -1 : (a.dia || '9999') > (b.dia || '9999') ? 1 : 0);
+}
+
+// ---------- Datos para el panel ----------
+
+// Ayer (para preguntar por las sesiones sin marcar), hoy y la semana que viene.
+function datos_() {
+  const ahora = new Date();
+  const hoy = diaDe_(ahora);
+  return {
+    hoy, ahora: horaDe_(ahora), ms: ahora.getTime(),
+    eventos: eventos_(diaMas_(hoy, -1), diaMas_(hoy, 8)),
+    examenes: cuenta_(hoy),
+    tareas: tareas_(hoy),
+    tipos: Object.keys(TIPOS).map(id => ({ id, nombre: TIPOS[id].nombre, min: TIPOS[id].min })),
+  };
+}
+
+// Texto del día para el atajo «Hoy» (y para que Siri lo lea).
+function resumenDia_(masDias) {
+  const ahora = new Date();
+  const hoy = diaDe_(ahora);
+  const dia = diaMas_(hoy, masDias);
+  const evs = eventos_(dia, diaMas_(dia, 1)).filter(e => !(e.diaFin < dia));
+  const pend = tareas_(hoy).filter(t => !t.hecha && t.dia && t.dia <= dia);
+  const cab = (masDias ? 'Mañana, ' : 'Hoy, ') + DIAS_SEMANA[diaSemana_(dia) - 1] + ' ' + Number(dia.slice(8)) + ':';
+  const lineas = [cab];
+  if (!evs.length) lineas.push(masDias ? 'No tienes nada en el calendario.' : 'Día libre en el calendario.');
+  evs.forEach(e => lineas.push('· ' + (e.todoDia ? 'Todo el día' : e.hora) + ' ' + e.titulo + (e.lugar ? ' (' + e.lugar + ')' : '')));
+  if (pend.length) lineas.push('Tareas: ' + pend.map(t => t.titulo).join(', ') + '.');
+  const prox = cuenta_(hoy).filter(e => e.dia >= dia)[0];
+  if (prox) {
+    const faltan = diasEntre_(dia, prox.dia);
+    lineas.push(TIPOS[prox.tipo].nombre + ' «' + prox.titulo + '» ' + (faltan === 0 ? (masDias ? 'ese día' : 'hoy') : faltan === 1 ? (masDias ? 'al día siguiente' : 'mañana') : 'en ' + faltan + ' días') +
+      (prox.minTotal ? ': llevas ' + horas_(prox.minHechos) + ' de ' + horas_(prox.minTotal) + ' de estudio.' : '.'));
+  }
+  return lineas.join('\n');
+}
+
+function horas_(min) {
+  const h = Math.round(min / 6) / 10;
+  return String(h).replace('.', ',') + ' h';
+}
+
+// <interpretar>
+// Entiende frases en castellano o catalán como «examen de fluidos el jueves a las 10»
+// o «sopar amb la Marta demà a les 21h». hoy: 'yyyy-mm-dd'.
+// Devuelve { titulo, dia, diaFin, hora, fin, min, todoDia, tipo, tarea, lugar }: dia y hora quedan vacíos si la frase no los dice.
+// Este bloque está copiado igual en Codigo.gs y en Panel.html (node sincronizar.js lo copia desde interpretar.js).
+function interpretar(texto, hoy) {
+  const orig = String(texto || '').replace(/[’`´]/g, "'").replace(/\s+/g, ' ').trim();
+  // Copia en minúsculas y sin acentos con la misma longitud: así las posiciones sirven para recortar el título.
+  const n = orig.split('').map(c => {
+    const s = c.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    return s.length === 1 ? s : c;
+  }).join('');
+  const usado = new Array(n.length).fill(false);
+  // Primera coincidencia que no pisa nada ya reconocido; la marca como usada.
+  const tomar = re => {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(n))) {
+      let libre = true;
+      for (let i = m.index; i < m.index + m[0].length; i++) if (usado[i]) libre = false;
+      if (libre && m[0]) {
+        for (let i = m.index; i < m.index + m[0].length; i++) usado[i] = true;
+        return m;
+      }
+      if (!m[0]) re.lastIndex++;
+    }
+    return null;
+  };
+
+  const r = { titulo: '', dia: '', diaFin: '', hora: '', fin: '', min: 0, todoDia: false, tipo: 'evento', tarea: false, lugar: '' };
+  const [y0, m0, d0] = String(hoy).split('-').map(Number);
+  const base = Date.UTC(y0, m0 - 1, d0);
+  const iso = t => new Date(t).toISOString().slice(0, 10);
+  const mas = k => iso(base + k * 86400000);
+  const dow = (new Date(base).getUTCDay() + 6) % 7; // 0 = lunes
+  const dosCifras = x => String(x).padStart(2, '0');
+  const fecha = (y, m, d) => {
+    const t = Date.UTC(y, m - 1, d);
+    const f = new Date(t);
+    return f.getUTCMonth() === m - 1 && f.getUTCDate() === d ? iso(t) : '';
+  };
+  // Día y mes sin año: el próximo que llegue (si ya pasó este año, el año que viene).
+  const proxima = (m, d) => {
+    const f = fecha(y0, m, d);
+    return f && f < hoy ? fecha(y0 + 1, m, d) : f;
+  };
+
+  // Tarea en vez de evento.
+  if (tomar(/^(?:tareas?|tascas?|pendiente|recordar|recorda'm|recordatorio)\b[\s:,.-]*/g)) r.tarea = true;
+
+  // Lugar al final: «… @ biblioteca».
+  const lugar = tomar(/\s*@\s*(.+)$/g);
+  if (lugar) r.lugar = orig.substr(lugar.index + lugar[0].indexOf('@') + 1).trim();
+
+  if (tomar(/\b(?:todo el dia|tot el dia)\b/g)) r.todoDia = true;
+
+  // Franja del día: sirve de hora si no se dice otra y para saber si «a las 5» es por la tarde.
+  let franja = '';
+  const fr = tomar(/\b(?:por la|de la|a la|per la|pel|al|esta|aquesta)\s+(manana|mati|tarde|tarda|noche|nit|mediodia|migdia)\b/g);
+  if (fr) {
+    franja = { manana: 'manana', mati: 'manana', tarde: 'tarde', tarda: 'tarde', noche: 'noche', nit: 'noche', mediodia: 'mediodia', migdia: 'mediodia' }[fr[1]];
+    if (/^(esta|aquesta)\b/.test(fr[0])) r.dia = mas(0);
+  }
+
+  // Día.
+  const rel = r.dia ? null : tomar(/\b(pasado manana|passat dema|dema passat|hoy|avui|manana|dema)\b/g);
+  if (rel) {
+    const w = rel[1];
+    r.dia = /pasado|passat/.test(w) ? mas(2) : /manana|dema/.test(w) ? mas(1) : mas(0);
+  }
+  if (!r.dia) {
+    const en = tomar(/\b(?:en|dentro de|d'aqui a|d'aqui|daqui a)\s+(\d{1,3})\s+(dias?|dies|semanas?|setmanes?)\b/g);
+    if (en) r.dia = mas(Number(en[1]) * (/^s/.test(en[2]) ? 7 : 1));
+  }
+  const DIAS = ['lunes|dilluns', 'martes|dimarts', 'miercoles|dimecres', 'jueves|dijous', 'viernes|divendres', 'sabado|dissabte', 'domingo|diumenge'];
+  if (!r.dia) {
+    const sem = tomar(/\b(?:(?:el|este|aquest|el proximo|el proxim|proximo|proxim)\s+)?(lunes|martes|miercoles|jueves|viernes|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)(?:\s+(que viene|que ve|vinent|proximo|proxim|de la semana que viene|de la setmana que ve))?\b/g);
+    if (sem) {
+      const idx = DIAS.findIndex(d => d.split('|').indexOf(sem[1]) >= 0);
+      // «El jueves» dicho un jueves es el de la semana que viene.
+      let delta = (idx - dow + 7) % 7 || 7;
+      if (sem[2] && /semana|setmana/.test(sem[2]) && delta < 7 && idx >= dow) delta += 7;
+      r.dia = mas(delta);
+    }
+  }
+  const MESES = ['ene|gen', 'feb', 'mar', 'abr', 'may|mai', 'jun', 'jul', 'ago', 'sep|set', 'oct', 'nov', 'dic|des'];
+  const numMes = w => MESES.findIndex(alts => alts.split('|').some(a => w.indexOf(a) === 0)) + 1;
+  const MES_RE = '(enero|gener|febrero|febrer|marzo|marc|abril|mayo|maig|junio|juny|julio|juliol|agosto|agost|septiembre|setiembre|setembre|octubre|noviembre|novembre|diciembre|desembre|ene|feb|mar|abr|jun|jul|ago|sept|sep|set|oct|nov|dic|des)';
+  // Varios días seguidos: «del 6 al 9 de diciembre» → todo el día, de ida a vuelta.
+  if (!r.dia) {
+    const dd = tomar(new RegExp("\\b(?:del|de|desde el|des del)\\s+(\\d{1,2})\\s+(?:al|a|hasta el|fins al)\\s+(\\d{1,2})\\s*(?:de\\s+|d'|del\\s+)?" + MES_RE + '\\b', 'g'));
+    if (dd && Number(dd[1]) <= Number(dd[2])) {
+      r.dia = proxima(numMes(dd[3]), Number(dd[1]));
+      r.diaFin = r.dia ? fecha(Number(r.dia.slice(0, 4)), numMes(dd[3]), Number(dd[2])) : '';
+      r.todoDia = !!r.diaFin;
+    }
+  }
+  if (!r.dia) {
+    const dm = tomar(/\b(?:el\s+)?(?:dia\s+)?(\d{1,2})\s*(?:de\s+|d'|del\s+)?(enero|gener|febrero|febrer|marzo|marc|abril|mayo|maig|junio|juny|julio|juliol|agosto|agost|septiembre|setiembre|setembre|octubre|noviembre|novembre|diciembre|desembre|ene|feb|mar|abr|jun|jul|ago|sept|sep|set|oct|nov|dic|des)\b\.?(?:\s+(?:de\s+|del\s+)?(\d{4}))?/g);
+    if (dm) r.dia = dm[3] ? fecha(Number(dm[3]), numMes(dm[2]), Number(dm[1])) : proxima(numMes(dm[2]), Number(dm[1]));
+  }
+
+  // Horas: «10:30», «10.30», «10h», «10h30» o un número tras «a las».
+  const NUM = '(\\d{1,2})(?:[:.](\\d{2})|h(\\d{2})?)?';
+  const ART = "(?:(?:las?|les|l')\\s*)?";
+  // Entrenar se hace temprano: «correr a las 6» son las 6 de la mañana.
+  const madruga = /\b(entreno|entrenar|entrenament|correr|calistenia|movilidad|mobilitat|gimnasio|gym|running|rodaje)\b/.test(n);
+  const minutos = (h, m, crudo) => {
+    h = Number(h);
+    m = Number(m || 0);
+    if (h > 24 || m > 59) return null;
+    // Sin «de la mañana», de 1 a 7 es por la tarde («a las 5» → 17:00), salvo que se escriba con cero delante.
+    if (franja === 'manana' || /^0/.test(crudo)) return h * 60 + m;
+    if ((franja === 'tarde' || franja === 'noche') && h < 12) h += 12;
+    else if (!franja && h >= 1 && h <= 7 && !(madruga && h >= 5)) h += 12;
+    return (h % 24) * 60 + m;
+  };
+  let ini = null;
+  let fin = null;
+  const rango = tomar(new RegExp('\\b(?:de|desde|des de|entre)\\s+' + ART + NUM + '\\s*(?:a|y|i|hasta|fins a|fins)\\s+' + ART + NUM + '(?:\\s*(?:h|horas|hores)\\b)?', 'g'))
+    || tomar(new RegExp('\\b(\\d{1,2})(?:[:.](\\d{2})|h(\\d{2})?)\\s*-\\s*' + NUM + '\\b', 'g'));
+  if (rango) {
+    ini = minutos(rango[1], rango[2] || rango[3], rango[1]);
+    fin = minutos(rango[4], rango[5] || rango[6], rango[4]);
+    if (ini != null && fin != null && fin <= ini && fin + 720 > ini) fin += 720;
+  }
+  if (ini == null) {
+    const t = tomar(new RegExp('\\b(?:a|sobre|cap a|hacia|at)\\s+' + ART + NUM + '(?:\\s*(?:h|horas|hores)\\b)?', 'g'));
+    if (t) ini = minutos(t[1], t[2] || t[3], t[1]);
+  }
+  // Duración: «2 horas», «durante 1h30», «45 min».
+  let dur = 0;
+  const d1 = tomar(/\b(?:durante|durant|por|per)\s+(\d+(?:[.,]\d+)?)\s*(?:h(\d{2})?|horas?|hores?|min|minutos?|minuts?)\b/g)
+    || tomar(/\b(\d+(?:[.,]\d+)?)\s*(?:horas?|hores?|min|minutos?|minuts?)\b/g);
+  if (d1) {
+    const v = Number(d1[1].replace(',', '.'));
+    dur = /min/.test(d1[0]) ? v : v * 60 + Number(d1[2] || 0);
+  }
+  if (ini == null) {
+    // «10h», «10:30» o «10.30» sueltos. Un «2h» suelto (de 1 a 5) se entiende como duración.
+    const t = tomar(/\b(\d{1,2})(?:[:.](\d{2})|h(\d{2})?)(?![\d/-])/g);
+    if (t) {
+      if (!t[2] && !t[3] && Number(t[1]) <= 5 && !dur) dur = Number(t[1]) * 60;
+      else ini = minutos(t[1], t[2] || t[3], t[1]);
+    }
+  }
+  if (!dur) {
+    const d2 = tomar(/\b(\d)h(\d{2})\b/g);
+    if (d2) dur = Number(d2[1]) * 60 + Number(d2[2]);
+  }
+
+  // Fechas con números, después de las horas para no confundir «10.30» con una fecha.
+  if (!r.dia) {
+    const num = tomar(/\b(?:el\s+)?(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b/g);
+    if (num) {
+      const y = num[3] ? Number(num[3].length === 2 ? '20' + num[3] : num[3]) : 0;
+      r.dia = y ? fecha(y, Number(num[2]), Number(num[1])) : proxima(Number(num[2]), Number(num[1]));
+    }
+  }
+  if (!r.dia) {
+    const sol = tomar(/\b(?:el|dia|el dia)\s+(\d{1,2})\b(?!\s*(?:h\b|:|horas|hores|min))/g);
+    if (sol) {
+      const d = Number(sol[1]);
+      let f = fecha(y0, m0, d);
+      if (!f || f < hoy) f = m0 === 12 ? fecha(y0 + 1, 1, d) : fecha(y0, m0 + 1, d);
+      r.dia = f;
+    }
+  }
+
+  if (ini == null && franja && !r.todoDia) ini = { manana: 540, mediodia: 840, tarde: 1020, noche: 1260 }[franja];
+
+  // Tipo por palabras clave (el orden importa: «entregar práctica» es una entrega, no una clase).
+  const TIPOS = [
+    ['estudio', /\b(estudiar|estudio|estudi|repasar|repaso|repassar|repas|sesion de estudio)\b/],
+    ['viaje', /\b(viaje|viatge|escapada|salida|sortida|excursion|excursio|acampada|campaments?|colonias|colonies)\b/],
+    ['entreno', /\b(entreno|entrenar|entrenament|gimnasio|gym|correr|corriendo|calistenia|movilidad|mobilitat|running|rodaje|series)\b/],
+    ['examen', /\b(examen|examenes|examens|exam|parcial|parcials|final de|prueba|control|test|recuperacion|recuperacio)\b/],
+    ['entrega', /\b(entrega|entregas|entregar|lliurament|lliurar|deadline|fecha limite|data limit)\b/],
+    ['clase', /\b(clase|clases|classe|classes|teoria|practicas?|laboratorio|lab|seminario|seminari|tutoria)\b/],
+    ['cita', /\b(medico|metge|dentista|cita|consulta|fisio|peluqueria|perruqueria|barbero|revision|revisio|banco|banc|entrevista)\b/],
+    ['plan', /\b(cena|sopar|comida|dinar|quedada|quedar|fiesta|festa|cumple|cumpleanos|aniversari|cine|cinema|concierto|concert|partido|partit|birras?|cafe)\b/],
+  ];
+  const tipo = TIPOS.find(t => t[1].test(n));
+  if (tipo) r.tipo = tipo[0];
+
+  if (ini != null) {
+    r.hora = dosCifras(Math.floor(ini / 60)) + ':' + dosCifras(ini % 60);
+    r.min = fin != null ? fin - ini : dur || ({ examen: 120, plan: 120, estudio: 50 }[r.tipo] || 60);
+    const f = ini + r.min;
+    r.fin = dosCifras(Math.floor(f / 60) % 24) + ':' + dosCifras(f % 60);
+  } else {
+    r.min = dur;
+    if (!r.tarea) r.todoDia = true;
+  }
+
+  // Título: lo que queda sin reconocer, sin palabras sueltas en los bordes.
+  let t = orig.split('').map((c, i) => usado[i] ? ' ' : c).join('').replace(/\s+/g, ' ').trim();
+  const SUELTAS = "el|la|los|las|lo|de|del|a|al|en|y|i|e|amb|con|para|per|que|les|l'|d'|por|este|esta|aquest|aquesta|sobre|hacia|cap|durante|durant|desde|des|hasta|fins";
+  const borde = new RegExp('^(?:(?:' + SUELTAS + ")(?:\\s+|$)|[,.;:\\-–])+|(?:\\s+(?:" + SUELTAS + ')|\\s*[,.;:\\-–])+$', 'i');
+  for (let i = 0; i < 4; i++) t = t.replace(borde, '').trim();
+  r.titulo = t ? t.charAt(0).toUpperCase() + t.slice(1) : '';
+  return r;
+}
+// </interpretar>
+
+// ---------- Hoja ----------
+
+let LIBRO_ = null;
+
+function libro_() {
+  if (!LIBRO_) {
+    const id = PropertiesService.getScriptProperties().getProperty('HOJA');
+    if (!id) throw new Error('Falta ejecutar configurar()');
+    LIBRO_ = SpreadsheetApp.openById(id);
+  }
+  return LIBRO_;
+}
+
+function hoja_(nombre) {
+  const h = libro_().getSheetByName(nombre);
+  if (!h) throw new Error('Falta la pestaña ' + nombre + ': ejecuta configurar()');
+  return h;
+}
+
+function cabecera_(h) {
+  return h.getRange(1, 1, 1, h.getLastColumn()).getValues()[0].map(String);
+}
+
+// Filas como objetos { columna: valor, _fila }. Se saltan las que tienen vacía la primera columna.
+function leer_(nombre) {
+  const v = hoja_(nombre).getDataRange().getValues();
+  const cab = v[0].map(String);
+  const out = [];
+  for (let i = 1; i < v.length; i++) {
+    if (v[i][0] === '' || v[i][0] == null) continue;
+    const o = { _fila: i + 1 };
+    cab.forEach((c, j) => { o[c] = v[i][j]; });
+    out.push(o);
+  }
+  return out;
+}
+
+function anadir_(nombre, obj) {
+  const h = hoja_(nombre);
+  h.appendRow(cabecera_(h).map(c => celda_(obj[c])));
+}
+
+function actualizar_(nombre, fila, cambios) {
+  const h = hoja_(nombre);
+  const cab = cabecera_(h);
+  Object.keys(cambios).forEach(c => {
+    const j = cab.indexOf(c);
+    if (j >= 0) h.getRange(fila, j + 1).setValue(celda_(cambios[c]));
+  });
+}
+
+// Borra de abajo arriba para que los números de fila no se desplacen.
+function borrarDonde_(nombre, cumple) {
+  const h = hoja_(nombre);
+  leer_(nombre).filter(cumple).map(r => r._fila).sort((a, b) => b - a).forEach(f => h.deleteRow(f));
+}
+
+// ---------- Utilidades ----------
+
+function claveValida_(k) {
+  return !!k && k === PropertiesService.getScriptProperties().getProperty('CLAVE');
+}
+
+function comprobar_(k) {
+  if (!claveValida_(k)) throw new Error('Clave incorrecta');
+}
+
+function texto_(s) {
+  return ContentService.createTextOutput(s).setMimeType(ContentService.MimeType.TEXT);
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function numero_(x) {
+  return Number(String(x).trim().replace(',', '.'));
+}
+
+// Texto que entra en la hoja o en un título: sin espacios sobrantes y sin convertirse en fórmula ("=algo").
+function limpiar_(s) {
+  s = String(s == null ? '' : s).trim();
+  return /^[=+\-@]/.test(s) ? "'" + s : s;
+}
+
+function celda_(v) {
+  if (v == null) return '';
+  return typeof v === 'string' ? limpiar_(v) : v;
+}
+
+function nuevoId_(letra) {
+  return letra + Utilities.getUuid().slice(0, 8);
+}
+
+// Fecha 'yyyy-mm-dd' que existe, o ''. (La hoja la convierte en fecha; tareas_ la vuelve a texto.)
+function diaValido_(s) {
+  const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return '';
+  const f = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return f.getUTCMonth() === +m[2] - 1 ? m[0] : '';
+}
+
+function diaDe_(fecha) {
+  return Utilities.formatDate(fecha, TZ, 'yyyy-MM-dd');
+}
+
+function horaDe_(fecha) {
+  return Utilities.formatDate(fecha, TZ, 'HH:mm');
+}
+
+function diaMas_(dia, n) {
+  const [y, m, d] = dia.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+function diasEntre_(a, b) {
+  const t = s => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10));
+  return Math.round((t(b) - t(a)) / 86400000);
+}
+
+// 1 = lunes … 7 = domingo
+function diaSemana_(dia) {
+  const [y, m, d] = dia.split('-').map(Number);
+  return (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7 + 1;
+}
+
+function fechaCorta_(dia) {
+  return DIAS_SEMANA[diaSemana_(dia) - 1].slice(0, 3) + ' ' + Number(dia.slice(8)) + ' ' + MESES_CORTOS[Number(dia.slice(5, 7)) - 1];
+}
