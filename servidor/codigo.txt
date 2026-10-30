@@ -131,7 +131,7 @@ function doGet(e) {
   if (!claveValida_(p.k)) return /^(datos|widget|informe)$/.test(p.accion || '') ? json_({ error: 'Clave incorrecta' }) : texto_('Clave incorrecta');
   if (p.accion === 'hoy') return texto_(resumenDia_(/^(manana|mañana|dema|demà)$/i.test(p.dia || '') ? 1 : 0));
   if (p.accion === 'semana') return texto_(textoSemana_());
-  if (p.accion === 'widget') return json_(widget_());
+  if (p.accion === 'widget') return json_(widget_(p.k));
   if (p.accion === 'scriptable') return texto_(SCRIPTABLE_.replace('__URL__', ScriptApp.getService().getUrl() + '?k=' + encodeURIComponent(p.k) + '&accion=widget'));
   if (p.accion === 'informe') return json_(informe_());
   if (p.accion === 'datos') {
@@ -861,8 +861,9 @@ function textoSemana_() {
 
 // ---------- Widget, informe y Atenea ----------
 
-// Lo justo para el widget: lo que toca ahora o después, el examen más cercano y los hábitos que faltan hoy.
-function widget_() {
+// Lo justo para el widget: lo que toca ahora o después, el examen más cercano, hábitos y tarjetas pendientes.
+// k: la clave, para que al tocar el widget se abra la app ya conectada.
+function widget_(k) {
   const ahora = new Date();
   const hoy = diaDe_(ahora);
   const t = ahora.getTime();
@@ -872,8 +873,10 @@ function widget_() {
   return {
     hoy, hora: horaDe_(ahora), diaSemana: DIAS_SEMANA[diaSemana_(hoy) - 1], diaMes: Number(hoy.slice(8)),
     eventos: evs.slice(0, 5).map(e => ({ titulo: e.titulo, hora: e.hora, horaFin: e.horaFin, tipo: e.tipo, ahora: e.t <= t, manana: e.dia > hoy, paso: primerPaso_(e) })),
-    examen: ex ? { titulo: ex.titulo, faltan: ex.faltan, hechos: ex.minHechos, total: ex.minTotal } : null,
+    examen: ex ? { titulo: ex.titulo, asig: ex.asig, faltan: ex.faltan, hechos: ex.minHechos, total: ex.minTotal, atraso: Math.max(0, ex.minPrevistos - ex.minHechos) } : null,
     habitos: h.filter(x => !x.hoy).length,
+    tarjetas: tarjetas_(hoy).hoy.length,
+    app: WEB + '?api=' + idDe_(ScriptApp.getService().getUrl()) + '&k=' + encodeURIComponent(k || ''),
   };
 }
 
@@ -1044,54 +1047,9 @@ function horas_(min) {
   return String(h).replace('.', ',') + ' h';
 }
 
-const SCRIPTABLE_ = `// Widget de Plum para Scriptable. Pega esto en un script nuevo y ponlo en un widget mediano o pequeño.
-// Al tocarlo se abre Plum.
-const URL = '__URL__';
-const C = { fondo: '#0c0c0d', acento: '#c3a2ff', texto: '#f4f4f2', gris: '#9a9aa1', tenue: '#67676e', examen: '#ff6b5e' };
-const TIPO = { estudio: '#c3a2ff', examen: '#ff6b5e', entrega: '#ffc247', clase: '#5aa2ff', entreno: '#ff9f43', cau: '#3fd69b', viaje: '#4dd0e1', cita: '#ff8fc7', plan: '#a3e635', evento: '#9a9aa1' };
-const col = c => new Color(c);
-const fm = Files.local();
-const cache = fm.joinPath(fm.documentsDirectory(), 'plum-widget.json');
-let d = null;
-try { d = await new Request(URL).loadJSON(); fm.writeString(cache, JSON.stringify(d)); } catch (e) { try { d = JSON.parse(fm.readString(cache)); } catch (e2) {} }
-const w = new ListWidget();
-w.backgroundColor = col(C.fondo);
-w.setPadding(14, 16, 14, 16);
-w.url = 'https://hidegalaxy.github.io/plum/';
-w.refreshAfterDate = new Date(Date.now() + 15 * 60000);
-const pequeno = config.widgetFamily === 'small';
-function texto(pila, t, color, fuente, lineas) { const x = pila.addText(t); x.textColor = col(color); x.font = fuente; x.lineLimit = lineas || 1; return x; }
-if (!d || d.error) {
-  texto(w, 'Plum', C.acento, Font.boldSystemFont(16));
-  texto(w, 'Sin conexión', C.gris, Font.systemFont(13));
-} else {
-  const cab = w.addStack();
-  cab.centerAlignContent();
-  texto(cab, d.diaSemana.toUpperCase() + ' ' + d.diaMes, C.acento, Font.boldSystemFont(12));
-  cab.addSpacer();
-  if (d.habitos && !pequeno) texto(cab, d.habitos + (d.habitos === 1 ? ' hábito' : ' hábitos'), C.gris, Font.mediumSystemFont(11));
-  w.addSpacer(6);
-  const e = d.eventos[0];
-  if (e) {
-    texto(w, e.ahora ? 'AHORA · HASTA ' + e.horaFin : (e.manana ? 'MAÑANA · ' : '') + e.hora, TIPO[e.tipo] || C.acento, Font.boldSystemFont(11));
-    texto(w, e.titulo, C.texto, Font.boldSystemFont(pequeno ? 15 : 17), 2);
-    if (e.paso && !pequeno) texto(w, e.paso, C.gris, Font.systemFont(12), 2);
-  } else {
-    texto(w, 'Nada más hoy', C.gris, Font.systemFont(14));
-  }
-  w.addSpacer();
-  if (d.examen) {
-    const f = w.addStack();
-    f.centerAlignContent();
-    texto(f, d.examen.faltan + (d.examen.faltan === 1 ? ' día' : ' días'), C.examen, Font.boldSystemFont(13));
-    f.addSpacer(6);
-    texto(f, d.examen.titulo, C.gris, Font.systemFont(12));
-  }
-}
-Script.setWidget(w);
-if (!config.runsInWidget) await w.presentMedium();
-Script.complete();
-`;
+// <scriptable>
+const SCRIPTABLE_ = "// Widget de Plum para Scriptable (iPhone).\n// 1. Instala Scriptable. 2. Crea un script nuevo, pega todo esto y llámalo Plum.\n// 3. En la pantalla de inicio (o de bloqueo) añade un widget de Scriptable y elige el script Plum.\n// Tamaños: pequeño, mediano, grande y los tres de la pantalla de bloqueo. Al tocarlo se abre Plum.\nconst URL = '__URL__';\nconst C = { fondo: '#0c0c0d', caja: '#161618', pista: '#2a2a2f', acento: '#c3a2ff', texto: '#f4f4f2', gris: '#9a9aa1', tenue: '#67676e', examen: '#ff6b5e', aviso: '#ffc247' };\nconst TIPO = { estudio: '#c3a2ff', examen: '#ff6b5e', entrega: '#ffc247', clase: '#5aa2ff', entreno: '#ff9f43', cau: '#3fd69b', viaje: '#4dd0e1', cita: '#ff8fc7', plan: '#a3e635', evento: '#9a9aa1', trabajo: '#6c6c73' };\nconst col = c => new Color(c);\nconst fam = config.widgetFamily || 'medium';\nconst bloqueo = /^accessory/.test(fam);\n\n// Datos: de Plum o, sin conexión, lo último que se guardó.\nconst fm = FileManager.local();\nconst cache = fm.joinPath(fm.documentsDirectory(), 'plum-widget.json');\nlet d = null, guardado = false, error = '';\ntry {\n  d = await new Request(URL).loadJSON();\n  if (d && d.error) { error = d.error; d = null; } else fm.writeString(cache, JSON.stringify(d));\n} catch (e) {\n  if (fm.fileExists(cache)) { try { d = JSON.parse(fm.readString(cache)); guardado = true; } catch (e2) {} }\n}\n\nconst w = new ListWidget();\nif (!bloqueo) {\n  w.backgroundColor = col(C.fondo);\n  w.setPadding(14, 15, 14, 15);\n}\nw.refreshAfterDate = new Date(Date.now() + 15 * 60000);\nif (d && d.app) w.url = d.app;\n\nfunction texto(pila, t, color, fuente, lineas) {\n  const x = pila.addText(String(t));\n  x.textColor = col(color);\n  x.font = fuente;\n  x.lineLimit = lineas || 1;\n  return x;\n}\nconst negrita = n => Font.boldSystemFont(n);\nconst normal = n => Font.systemFont(n);\nconst media = n => Font.semiboldSystemFont(n);\n\n// Barra de progreso de horas de estudio.\nfunction barra(pila, hechos, total, ancho) {\n  const fondo = pila.addStack();\n  fondo.size = new Size(ancho, 6);\n  fondo.cornerRadius = 3;\n  fondo.backgroundColor = col(C.pista);\n  const lleno = fondo.addStack();\n  lleno.size = new Size(Math.max(4, Math.round(ancho * Math.min(1, total ? hechos / total : 0))), 6);\n  lleno.cornerRadius = 3;\n  lleno.backgroundColor = col(C.acento);\n  fondo.addSpacer();\n}\nconst horas = min => String(Math.round(min / 6) / 10).replace('.', ',') + ' h';\nconst cuando = e => e.ahora ? 'AHORA · HASTA ' + e.horaFin : (e.manana ? 'MAÑANA · ' : 'A LAS ') + e.hora;\n\nif (!d) {\n  if (bloqueo) {\n    texto(w, error ? 'Plum: ' + error : 'Plum: sin conexión', '#ffffff', media(13));\n  } else {\n    texto(w, 'Plum', C.acento, negrita(16));\n    texto(w, error || 'Sin conexión', C.gris, normal(13), 2);\n  }\n} else if (fam === 'accessoryInline') {\n  const e = d.eventos[0];\n  texto(w, e ? (e.ahora ? 'Ahora: ' : e.hora + ' ') + e.titulo : d.examen ? d.examen.faltan + ' d · ' + d.examen.titulo : 'Nada más hoy', '#ffffff', media(13));\n} else if (fam === 'accessoryCircular') {\n  w.addAccessoryWidgetBackground = true;\n  const ex = d.examen;\n  texto(w, ex ? ex.faltan : '–', '#ffffff', negrita(22)).centerAlignText();\n  texto(w, ex ? (ex.asig || 'días') : 'Plum', '#ffffff', media(10)).centerAlignText();\n} else if (fam === 'accessoryRectangular') {\n  const e = d.eventos[0];\n  texto(w, e ? cuando(e) : 'HOY', '#ffffff', negrita(11));\n  texto(w, e ? e.titulo : 'Nada más hoy', '#ffffff', media(14), 2);\n  if (d.examen) texto(w, d.examen.faltan + ' días · ' + d.examen.titulo, '#ffffff', normal(11));\n} else {\n  // Cabecera: día y avisos.\n  const cab = w.addStack();\n  cab.centerAlignContent();\n  texto(cab, d.diaSemana.toUpperCase() + ' ' + d.diaMes, C.acento, negrita(12));\n  cab.addSpacer();\n  if (guardado) texto(cab, 'Sin conexión · datos guardados', C.tenue, normal(10));\n  else if (fam !== 'small') {\n    const extra = [];\n    if (d.habitos) extra.push(d.habitos + (d.habitos === 1 ? ' hábito' : ' hábitos'));\n    if (d.tarjetas) extra.push(d.tarjetas + ' tarjetas');\n    if (extra.length) texto(cab, extra.join(' · '), C.gris, media(11));\n  }\n  w.addSpacer(fam === 'small' ? 6 : 8);\n\n  // Lo que toca ahora o lo siguiente, con su primer paso.\n  const e = d.eventos[0];\n  if (e) {\n    texto(w, cuando(e), TIPO[e.tipo] || C.acento, negrita(11));\n    w.addSpacer(2);\n    texto(w, e.titulo, C.texto, negrita(fam === 'small' ? 15 : 18), 2);\n    if (e.paso && fam !== 'small') { w.addSpacer(2); texto(w, e.paso, C.gris, normal(12), fam === 'large' ? 3 : 2); }\n  } else {\n    texto(w, 'Nada más hoy', C.gris, media(15));\n  }\n\n  // En el grande, lo que viene después.\n  if (fam === 'large' && d.eventos.length > 1) {\n    w.addSpacer(12);\n    texto(w, 'DESPUÉS', C.tenue, negrita(10));\n    w.addSpacer(4);\n    d.eventos.slice(1, 6).forEach(x => {\n      const f = w.addStack();\n      f.centerAlignContent();\n      const punto = f.addStack();\n      punto.size = new Size(6, 6);\n      punto.cornerRadius = 3;\n      punto.backgroundColor = col(TIPO[x.tipo] || C.acento);\n      f.addSpacer(8);\n      texto(f, (x.manana ? 'mañ ' : '') + x.hora, C.gris, media(12));\n      f.addSpacer(8);\n      texto(f, x.titulo, C.texto, media(13));\n      w.addSpacer(5);\n    });\n  }\n\n  w.addSpacer();\n\n  // Abajo: el examen que más importa, con sus horas.\n  const ex = d.examen;\n  if (ex) {\n    const f = w.addStack();\n    f.centerAlignContent();\n    texto(f, ex.faltan + (ex.faltan === 1 ? ' día' : ' días'), C.examen, negrita(13));\n    f.addSpacer(6);\n    texto(f, ex.titulo, C.gris, normal(12));\n    if (ex.total && fam !== 'small') {\n      w.addSpacer(5);\n      const b = w.addStack();\n      b.centerAlignContent();\n      barra(b, ex.hechos, ex.total, fam === 'large' ? 210 : 150);\n      b.addSpacer(8);\n      texto(b, horas(ex.hechos) + ' de ' + horas(ex.total), C.gris, media(11));\n    }\n    if (ex.atraso >= 60 && fam !== 'small') {\n      w.addSpacer(3);\n      texto(w, 'Vas ' + horas(ex.atraso) + ' por detrás', C.aviso, media(11));\n    }\n  }\n}\n\nScript.setWidget(w);\nif (config.runsInApp) {\n  if (fam === 'small') await w.presentSmall();\n  else if (fam === 'large') await w.presentLarge();\n  else await w.presentMedium();\n}\nScript.complete();\n";
+// </scriptable>
 
 // <interpretar>
 // Entiende frases en castellano o catalán como «examen de fluidos el jueves a las 10»

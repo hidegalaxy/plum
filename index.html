@@ -149,6 +149,7 @@
   .velo { position: absolute; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: flex-end; z-index: 5; }
   .hoja { width: 100%; background: var(--surface); border-radius: 28px 28px 0 0; border-top: 1px solid var(--track); padding: 20px 20px max(24px, env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 14px; max-height: 92%; overflow-y: auto; animation: sube .25s ease; }
   @keyframes sube { from { transform: translateY(30px); opacity: .5; } }
+  .hoja > *, .hoja form > *, #focoCuerpo > *, #tarjetaCuerpo > * { flex-shrink: 0; }
   .hoja h3 { margin: 0; font-size: 22px; letter-spacing: -.02em; overflow-wrap: anywhere; }
   .hoja .cuando { color: var(--muted); margin: -8px 0 0; }
   .hoja .como { margin: 0; white-space: pre-line; line-height: 1.5; background: var(--bg); border-radius: 14px; padding: 12px 14px; }
@@ -257,10 +258,26 @@
   .copiar { display: flex; gap: 8px; align-items: center; }
   .copiar .campo { height: 40px; font-size: 13px; color: var(--muted); }
 
+  /* Pantalla de carga: el logo respira mientras llegan los datos y se va con un fundido. */
+  .splash { position: fixed; inset: 0; z-index: 30; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: env(safe-area-inset-top, 0px) 24px env(safe-area-inset-bottom, 0px); transition: opacity .45s ease, transform .45s ease; }
+  .splash.fuera { opacity: 0; transform: scale(1.04); pointer-events: none; }
+  .splash .logo { width: 92px; height: 92px; border-radius: 26px; background: var(--plum); display: grid; place-items: center; animation: respira 1.8s ease-in-out infinite; box-shadow: 0 0 0 0 rgba(195, 162, 255, .5); }
+  .splash b { font-size: 34px; font-weight: 700; letter-spacing: -.03em; margin-top: 6px; }
+  .splash p { margin: 0; color: var(--muted); font-size: 15px; min-height: 21px; transition: opacity .25s; }
+  .splash .barrita { width: 120px; height: 3px; border-radius: 2px; background: var(--track); overflow: hidden; margin-top: 8px; }
+  .splash .barrita i { display: block; width: 40%; height: 100%; border-radius: 2px; background: var(--plum); animation: corre 1.1s ease-in-out infinite; }
+  @keyframes respira { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(195, 162, 255, .45); } 50% { transform: scale(1.06); box-shadow: 0 0 0 18px rgba(195, 162, 255, 0); } }
+  @keyframes corre { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
 </head>
 <body data-k="<?= clave ?>">
+<div class="splash" id="splash" role="status" aria-live="polite">
+  <div class="logo"><svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="#0c0c0d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/><circle cx="15.5" cy="15.5" r="1.6" fill="#0c0c0d"/></svg></div>
+  <b>Plum</b>
+  <p id="frase">Abriendo tu semana…</p>
+  <div class="barrita"><i></i></div>
+</div>
 <div class="app">
   <div class="carga" id="carga"></div>
   <header><h1 id="titulo">Plum</h1><span id="sub"></span>
@@ -620,6 +637,7 @@ function interpretar(texto, hoy) {
   }
 
   function pantallaClave(error) {
+    quitarSplash();
     $('nav').hidden = true;
     $('mas').hidden = true;
     $('titulo').textContent = 'Plum';
@@ -642,8 +660,32 @@ function interpretar(texto, hoy) {
   }
 
   function pantallaError(msg) {
+    quitarSplash();
     $('vista').innerHTML = `<section class="tip"><b>No he podido abrir tu calendario</b><p class="nota">${esc(msg)}</p>
       <button class="btn" data-act="reintentar">Reintentar</button></section>`;
+  }
+
+  // ---------- Pantalla de carga ----------
+
+  const SPLASH_DESDE = Date.now();
+  const FRASES = ['Abriendo tu semana…', 'Contando días para el examen…', 'Buscando huecos libres…', 'Barajando tus tarjetas…', 'Casi está…'];
+  let nFrase = 0;
+  const cambiarFrase = setInterval(() => {
+    const f = $('frase');
+    if (!f) return clearInterval(cambiarFrase);
+    f.style.opacity = 0;
+    setTimeout(() => { nFrase = Math.min(nFrase + 1, FRASES.length - 1); f.textContent = FRASES[nFrase]; f.style.opacity = 1; }, 250);
+  }, 1300);
+
+  // Se ve al menos un momento, aunque los datos lleguen enseguida.
+  function quitarSplash() {
+    const s = $('splash');
+    if (!s || s.classList.contains('fuera')) return;
+    setTimeout(() => {
+      s.classList.add('fuera');
+      clearInterval(cambiarFrase);
+      setTimeout(() => s.remove(), 500);
+    }, Math.max(0, 900 - (Date.now() - SPLASH_DESDE)));
   }
 
   // ---------- Utilidades ----------
@@ -721,6 +763,7 @@ function interpretar(texto, hoy) {
     }
     // Si se estaba escribiendo, se conserva lo escrito y el foco.
     if (enfoque && $(enfoque) && texto != null && !$(enfoque).value) { $(enfoque).value = texto; $(enfoque).focus(); }
+    quitarSplash();
     const i = $('rapido');
     if (i) i.oninput = () => previa(i.value, $('previa'));
     const t = $('nuevaTarea');
@@ -1158,7 +1201,8 @@ function interpretar(texto, hoy) {
       <form data-form="atenea" style="display:contents"><input class="campo" id="ateneaUrl" placeholder="https://atenea.upc.edu/calendar/export_execute.php?…" autocomplete="off">
       <div class="fila"><button class="btn" style="flex:1">${D.atenea.conectado ? 'Cambiar enlace' : 'Conectar'}</button>${D.atenea.conectado ? '<button type="button" class="btn sec" style="flex:1" data-act="sincronizar">Mirar ahora</button>' : ''}</div></form>
       <span class="eti">Widget (app Scriptable)</span>
-      <p class="nota">Instala Scriptable, abre este enlace en Safari, copia todo el texto en un script nuevo y añade un widget de Scriptable a la pantalla de inicio.</p>
+      <p class="nota">1) Instala <b>Scriptable</b> (gratis). 2) Abre el código, selecciónalo todo y cópialo. 3) En Scriptable, <b>+</b>, pégalo y llama al script <b>Plum</b>. 4) Mantén pulsada la pantalla de inicio → <b>+</b> → Scriptable, elige el tamaño y en «Script» pon Plum. Sirve también en la pantalla de bloqueo.</p>
+      <a class="btn sec" href="${esc(base + '&accion=scriptable')}" target="_blank" rel="noopener">Abrir el código del widget</a>
       ${copiar('enlWidget', base + '&accion=scriptable')}
       <span class="eti">Avisos y Siri (app Dreceres)</span>
       <p class="nota">Crea un atajo con «Obtén el contingut de l'URL» y «Mostra la notificació». Para el aviso de las 6:00 y el repaso del domingo, ponlo en Automatització → Hora del dia.</p>
