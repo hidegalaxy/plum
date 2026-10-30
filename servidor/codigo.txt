@@ -10,10 +10,17 @@
 
 const TZ = 'Europe/Madrid';
 
-// Los eventos viven en Google Calendar; la hoja solo guarda las tareas.
+// Los eventos viven en Google Calendar; la hoja guarda lo demás.
 const ESQUEMA = {
-  Tareas: ['id', 'titulo', 'dia', 'hecha', 'creada'],
+  Tareas: ['id', 'titulo', 'dia', 'hecha', 'creada', 'lista'],
+  Habitos: ['id', 'nombre', 'orden'],
+  Marcas: ['dia', 'habito'],
+  Temario: ['id', 'asig', 'examen', 'apartado', 'titulo', 'estado'],
+  Tarjetas: ['id', 'asig', 'tema', 'frente', 'dorso', 'caja', 'proxima'],
 };
+// Repaso espaciado de las tarjetas: días hasta volver a verla según su caja (1 = recién fallada).
+const CAJAS = [0, 1, 2, 4, 8, 16];
+const ESTADOS_TEMARIO = ['', 'rojo', 'ambar', 'verde'];
 // Tipos de evento: color en Google Calendar, duración por defecto y avisos (minutos antes).
 // En los de todo el día, 900 min antes = el día anterior a las 9:00. [] = sin avisos; null = los de tu calendario.
 const TIPOS = {
@@ -30,7 +37,18 @@ const TIPOS = {
   evento: { nombre: 'Evento', color: '1', min: 60, avisos: null, avisosDia: null },
 };
 // Etiquetas privadas que Plum pone en cada evento.
-const TAG = { tipo: 'plum', asig: 'plum.asig', estado: 'plum.estado', plan: 'plum.plan' };
+const TAG = {
+  tipo: 'plum', asig: 'plum.asig', estado: 'plum.estado', plan: 'plum.plan',
+  pasos: 'plum.pasos',          // pasos de la descripción ya tachados: «0,2»
+  nota: 'plum.nota',            // qué tal fue la sesión, de 1 a 5
+  simulacro: 'plum.simulacro',  // nota del simulacro, de 0 a 10
+  atenea: 'plum.atenea',        // UID del evento en el calendario de Atenea
+};
+// Asignatura a partir del nombre del curso de Atenea.
+const ASIG_ATENEA = [[/ELÈCTRICS|ELECTRICS|820016/i, 'STE'], [/FLUIDS|820013/i, 'MF'], [/MECÀNICS|MECANICS|820018/i, 'STM']];
+// Tangerine (la app de entreno) escribe sus sesiones en el mismo calendario con esta etiqueta.
+const TAG_TANGERINE = 'tangerine';
+const WEB_TANGERINE = 'https://hidegalaxy.github.io/tangerine/';
 // Huecos donde se puede recolocar una sesión de estudio que no se hizo (1 = lunes … 7 = domingo).
 // El plan que manda Claude puede cambiarlos (se guardan en la propiedad VENTANAS).
 const VENTANAS = {
@@ -83,6 +101,13 @@ function configurar() {
   if (!props.getProperty('CLAVE')) {
     props.setProperty('CLAVE', Utilities.getUuid().replace(/-/g, '').slice(0, 16));
   }
+  // Cada 6 horas mira si hay entregas nuevas en Atenea (solo hace algo cuando se le ha dado el enlace).
+  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'sincronizarAtenea')) {
+    ScriptApp.newTrigger('sincronizarAtenea').timeBased().everyHours(6).create();
+  }
+  if (!leer_('Habitos').length) {
+    ['Dormir antes de las 23:00', 'Movilidad 10 min', '2 litros de agua'].forEach((nombre, i) => anadir_('Habitos', { id: nuevoId_('h'), nombre, orden: i + 1 }));
+  }
   CacheService.getScriptCache().remove('calendarios');
   tocado_();
   Logger.log('Calendario: ' + cal.getName());
@@ -93,14 +118,22 @@ function configurar() {
 // ---------- Web ----------
 
 // GET ?k=CLAVE                         → panel
-// GET ?k=CLAVE&accion=hoy[&dia=manana] → resumen del día en texto (atajo «Hoy» y Siri)
+// GET ?k=CLAVE&accion=hoy[&dia=manana] → resumen del día en texto (atajo «Hoy», aviso de la mañana y Siri)
+// GET ?k=CLAVE&accion=semana           → repaso de la semana en texto (aviso del domingo)
+// GET ?k=CLAVE&accion=widget           → datos para el widget de Scriptable
+// GET ?k=CLAVE&accion=scriptable       → código del widget, listo para copiar
+// GET ?k=CLAVE&accion=informe          → sesiones, notas, temario y tarjetas en JSON (para que Claude ajuste el plan)
 // GET ?k=CLAVE&accion=datos            → datos del panel en JSON (para la web propia)
 // GET (sin clave) o ?accion=instalar   → página para instalar Plum en el iPhone
 function doGet(e) {
   const p = e.parameter;
   if (p.accion === 'instalar' || (!p.k && !p.accion)) return paginaInstalar_(p.k);
-  if (!claveValida_(p.k)) return p.accion === 'datos' ? json_({ error: 'Clave incorrecta' }) : texto_('Clave incorrecta');
+  if (!claveValida_(p.k)) return /^(datos|widget|informe)$/.test(p.accion || '') ? json_({ error: 'Clave incorrecta' }) : texto_('Clave incorrecta');
   if (p.accion === 'hoy') return texto_(resumenDia_(/^(manana|mañana|dema|demà)$/i.test(p.dia || '') ? 1 : 0));
+  if (p.accion === 'semana') return texto_(textoSemana_());
+  if (p.accion === 'widget') return json_(widget_());
+  if (p.accion === 'scriptable') return texto_(SCRIPTABLE_.replace('__URL__', ScriptApp.getService().getUrl() + '?k=' + encodeURIComponent(p.k) + '&accion=widget'));
+  if (p.accion === 'informe') return json_(informe_());
   if (p.accion === 'datos') {
     try {
       return json_(datos_());
@@ -243,20 +276,94 @@ const ACCIONES_ = {
     tocado_();
     return 'Borrado';
   },
-  // Sesión hecha (o deshacer): cuenta para las horas del examen.
+  // Sesión hecha (o deshacer): cuenta para las horas del examen. Con nota (1–5) dice qué tal fue.
   estado: d => {
     const ev = buscarEvento_(d);
     const hecha = d.estado === 'hecha';
     ev.setTag(TAG.estado, hecha ? 'hecha' : '');
+    const nota = Math.round(numero_(d.nota));
+    if (hecha && nota >= 1 && nota <= 5) ev.setTag(TAG.nota, String(nota));
     tocado_();
     return hecha ? '¡Hecha! Cuenta para el examen' : 'Marcada como pendiente';
   },
+  nota: d => {
+    const nota = Math.round(numero_(d.nota));
+    if (!(nota >= 1 && nota <= 5)) throw new Error('La nota va del 1 al 5');
+    buscarEvento_(d).setTag(TAG.nota, String(nota));
+    return 'Apuntado: ' + nota + ' de 5';
+  },
+  simulacro: d => {
+    const nota = Math.round(numero_(d.nota) * 10) / 10;
+    if (!(nota >= 0 && nota <= 10)) throw new Error('La nota va del 0 al 10');
+    const ev = buscarEvento_(d);
+    ev.setTag(TAG.simulacro, String(nota));
+    ev.setTag(TAG.estado, 'hecha');
+    tocado_();
+    return 'Simulacro: ' + String(nota).replace('.', ',') + ' sobre 10';
+  },
+  // Tacha (o destacha) el paso i de la lista de la sesión.
+  paso: d => {
+    const ev = buscarEvento_(d);
+    const i = Math.round(numero_(d.i));
+    const hechos = String(ev.getTag(TAG.pasos) || '').split(',').filter(x => x !== '').map(Number);
+    const ya = hechos.indexOf(i) >= 0;
+    const nuevos = ya ? hechos.filter(x => x !== i) : hechos.concat(i).sort((a, b) => a - b);
+    ev.setTag(TAG.pasos, nuevos.join(','));
+    return '';
+  },
   // Lleva la sesión al siguiente hueco libre (antes de su examen, si lo tiene).
   recolocar: d => recolocar_(buscarEvento_(d)),
+  // Vas atrasado: una hora más de esa asignatura en el primer hueco libre.
+  extra: d => sesionExtra_(String(d.asig || ''), Math.round(numero_(d.min)) || 60),
   // Claude manda un plan entero: borra lo que quedaba pendiente de ese plan y lo crea de nuevo.
   plan: d => cargarPlan_(d),
+  // Claude manda el temario de un examen y las tarjetas de repaso (se conserva lo ya marcado).
+  temario: d => cargarTemario_(d),
+  tarjetas: d => cargarTarjetas_(d),
+  // Toca un apartado del temario: sin marcar → rojo → ámbar → verde → sin marcar.
+  apartado: d => {
+    const fila = leer_('Temario').find(r => String(r.id) === d.id);
+    if (!fila) throw new Error('No encuentro ese apartado');
+    const estado = ESTADOS_TEMARIO.indexOf(d.estado) >= 0 ? d.estado
+      : ESTADOS_TEMARIO[(ESTADOS_TEMARIO.indexOf(String(fila.estado || '')) + 1) % ESTADOS_TEMARIO.length];
+    actualizar_('Temario', fila._fila, { estado });
+    return '';
+  },
+  // Repaso de una tarjeta: si la sabías sube de caja y tarda más en volver; si no, vuelve mañana.
+  tarjeta: d => {
+    const fila = leer_('Tarjetas').find(r => String(r.id) === d.id);
+    if (!fila) throw new Error('No encuentro esa tarjeta');
+    const caja = d.sabia ? Math.min(CAJAS.length - 1, (Number(fila.caja) || 1) + 1) : 1;
+    actualizar_('Tarjetas', fila._fila, { caja, proxima: diaMas_(diaDe_(new Date()), CAJAS[caja]) });
+    return '';
+  },
+  habito: d => {
+    const dia = diaValido_(d.dia) || diaDe_(new Date());
+    if (!leer_('Habitos').some(h => String(h.id) === d.id)) throw new Error('No encuentro ese hábito');
+    const ya = marcas_().some(m => m.dia === dia && m.habito === d.id);
+    if (ya) borrarDonde_('Marcas', r => celdaDia_(r.dia) === dia && String(r.habito) === d.id);
+    else anadir_('Marcas', { dia, habito: d.id });
+    return '';
+  },
+  habitoNuevo: d => {
+    const nombre = limpiar_(d.nombre);
+    if (!nombre) throw new Error('Ponle un nombre al hábito');
+    const orden = leer_('Habitos').reduce((m, h) => Math.max(m, Number(h.orden) || 0), 0) + 1;
+    anadir_('Habitos', { id: nuevoId_('h'), nombre, orden });
+    return 'Hábito añadido';
+  },
+  habitoBorrar: d => { borrarDonde_('Habitos', r => String(r.id) === d.id); return 'Hábito quitado'; },
+  // Enlace del calendario de Atenea (se guarda en el servidor) y sincronización al momento.
+  atenea: d => {
+    if (d.url != null) {
+      const url = String(d.url).trim();
+      if (url && !/^https:\/\/atenea\.upc\.edu\/calendar\/export_execute\.php\?/.test(url)) throw new Error('Ese no es un enlace del calendario de Atenea');
+      PropertiesService.getScriptProperties().setProperty('ATENEA_ICS', url);
+    }
+    return sincronizarAtenea();
+  },
 
-  tarea: d => crearTarea_(d.titulo, d.dia),
+  tarea: d => crearTarea_(d.titulo, d.dia, d.lista),
   hecha: d => {
     const fila = leer_('Tareas').find(r => String(r.id) === d.id);
     if (!fila) throw new Error('No encuentro esa tarea');
@@ -270,12 +377,20 @@ const ACCIONES_ = {
 // ---------- Eventos ----------
 
 // Una frase («estudiar STE el lunes a las 5») → evento o tarea, con mensaje para la notificación.
+// Una tarea que empieza por «cau» va a la lista del cau y, sin fecha, al sábado que viene.
 function rapido_(texto, forzarTarea) {
   const ahora = new Date();
   const hoy = diaDe_(ahora);
   const r = interpretar(texto, hoy);
   if (!r.titulo) throw new Error('No entiendo qué apuntar');
-  if (r.tarea || forzarTarea) return crearTarea_(r.titulo, r.dia);
+  if (r.tarea || forzarTarea) {
+    const cau = /^(cau|agrupament)\b[\s:,.-]*/i;
+    if (cau.test(r.titulo)) {
+      const titulo = r.titulo.replace(cau, '');
+      return crearTarea_(titulo.charAt(0).toUpperCase() + titulo.slice(1), r.dia || diaMas_(hoy, (6 - diaSemana_(hoy) + 7) % 7 || 7), 'cau');
+    }
+    return crearTarea_(r.titulo, r.dia);
+  }
   // Sin día: hoy, o mañana si la hora ya ha pasado.
   if (!r.dia) r.dia = r.hora && r.hora <= horaDe_(ahora) ? diaMas_(hoy, 1) : hoy;
   return crearEvento_(r);
@@ -417,22 +532,43 @@ function ventanas_() {
   return VENTANAS;
 }
 
-// Busca el primer hueco libre del mismo largo en tus ventanas de estudio, desde ahora y como mucho 21 días.
-// Si la sesión es de una asignatura con examen pendiente, el hueco tiene que ser antes del examen.
+// Lleva la sesión al primer hueco libre del mismo largo en tus ventanas de estudio, desde ahora y como mucho 21 días.
+// Si es de una asignatura con examen pendiente, el hueco tiene que ser antes del examen.
 function recolocar_(ev) {
   if (ev.isAllDayEvent()) throw new Error('Solo se recolocan sesiones con hora');
   const min = Math.round((ev.getEndTime() - ev.getStartTime()) / 60000);
-  const asig = ev.getTag(TAG.asig) || '';
+  const t = buscarHueco_(min, ev.getTag(TAG.asig) || '', { id: ev.getId(), t: ev.getStartTime().getTime() });
+  ev.setTime(new Date(t), new Date(t + min * 60000));
+  ev.setTag(TAG.estado, '');
+  tocado_();
+  return 'Movida al ' + fechaCorta_(diaDe_(new Date(t))) + ', ' + horaDe_(new Date(t));
+}
+
+// Vas atrasado: crea una sesión más de la asignatura en el primer hueco antes de su examen.
+function sesionExtra_(asig, min) {
+  if (!asig) throw new Error('Falta la asignatura');
+  const t = buscarHueco_(min, asig, null);
+  const ini = new Date(t);
+  return crearEvento_({
+    titulo: asig + ' · Sesión extra', tipo: 'estudio', asig, plan: 'extra', dia: diaDe_(ini), hora: horaDe_(ini), min,
+    desc: 'Para recuperar horas: repasa lo que tengas en rojo del temario y haz problemas de ese apartado.',
+  });
+}
+
+// Primer momento libre (en ms) de «min» minutos dentro de las ventanas de estudio.
+// excluir: { id, t } de la propia sesión, que no cuenta como ocupado.
+function buscarHueco_(min, asig, excluir) {
   const ahora = new Date();
   const hoy = diaDe_(ahora);
   let limite = Utilities.parseDate(diaMas_(hoy, 21) + ' 00:00', TZ, 'yyyy-MM-dd HH:mm').getTime();
+  let porExamen = false;
   if (asig) {
     const ex = cuenta_(hoy).find(e => e.asig === asig && e.tipo === 'examen' && e.t > ahora.getTime());
-    if (ex) limite = Math.min(limite, ex.t);
+    if (ex && ex.t < limite) { limite = ex.t; porExamen = true; }
   }
   // Ocupado: todo lo que tiene hora (menos la propia sesión) y los días enteros de viaje.
   const evs = eventos_(hoy, diaMas_(hoy, 22));
-  const ocupado = evs.filter(e => !e.todoDia && !(e.id === ev.getId() && e.t === ev.getStartTime().getTime()))
+  const ocupado = evs.filter(e => !e.todoDia && !(excluir && e.id === excluir.id && e.t === excluir.t))
     .map(e => [e.t, e.t + e.min * 60000]);
   const diasViaje = {};
   evs.filter(e => e.todoDia && e.tipo === 'viaje').forEach(e => {
@@ -450,17 +586,12 @@ function recolocar_(ev) {
       let t = Math.max(ini0, desdeYa);
       while (t + min * 60000 <= finF && t + min * 60000 <= limite) {
         const choca = ocupado.find(([x, y]) => x < t + min * 60000 && y > t);
-        if (!choca) {
-          ev.setTime(new Date(t), new Date(t + min * 60000));
-          ev.setTag(TAG.estado, '');
-          tocado_();
-          return 'Movida al ' + fechaCorta_(dia) + ', ' + horaDe_(new Date(t));
-        }
+        if (!choca) return t;
         t = Math.ceil(choca[1] / (15 * 60000)) * 15 * 60000;
       }
     }
   }
-  throw new Error(limite < Infinity && asig ? 'No queda hueco antes del examen: muévela a mano' : 'No encuentro hueco en las próximas 3 semanas');
+  throw new Error(porExamen ? 'No queda hueco antes del examen: muévela a mano' : 'No encuentro hueco en las próximas 3 semanas');
 }
 
 // ---------- Lectura de eventos ----------
@@ -497,13 +628,22 @@ function evento_(ev, c) {
     diaFin = diaDe_(new Date(fin.getTime() - 1));
     if (diaFin < dia) diaFin = dia;
   }
+  // Las sesiones de Tangerine se marcan hechas allí: su título empieza por «✓».
+  const tangerine = !!ev.getTag(TAG_TANGERINE);
+  const titulo = String(ev.getTitle() || '(sin título)');
   return {
-    id: ev.getId(), cal: c.id, editable: c.propio,
-    titulo: String(ev.getTitle() || '(sin título)'), lugar: String(ev.getLocation() || ''),
-    desc: String(ev.getDescription() || '').slice(0, 600),
+    id: ev.getId(), cal: c.id, editable: c.propio && !tangerine,
+    titulo: tangerine ? titulo.replace(/^✓\s*/, '').replace(/\s*·\s*Tangerine$/, '') : titulo,
+    lugar: String(ev.getLocation() || ''),
+    desc: String(ev.getDescription() || '').slice(0, 1500),
     t: ini.getTime(), dia, diaFin, hora, horaFin, min, todoDia,
-    tipo: tipoDe_(ev, c.nombre), serie: ev.isRecurringEvent(),
-    asig: String(ev.getTag(TAG.asig) || ''), estado: String(ev.getTag(TAG.estado) || ''),
+    tipo: tangerine ? 'entreno' : tipoDe_(ev, c.nombre), serie: ev.isRecurringEvent(), tangerine,
+    asig: String(ev.getTag(TAG.asig) || ''),
+    estado: tangerine ? (/^✓/.test(titulo) ? 'hecha' : '') : String(ev.getTag(TAG.estado) || ''),
+    pasos: String(ev.getTag(TAG.pasos) || ''),
+    nota: Number(ev.getTag(TAG.nota) || 0),
+    simulacro: ev.getTag(TAG.simulacro) == null || ev.getTag(TAG.simulacro) === '' ? null : Number(ev.getTag(TAG.simulacro)),
+    atenea: !!ev.getTag(TAG.atenea),
   };
 }
 
@@ -568,13 +708,17 @@ function cuenta_(hoy) {
     const sesiones = e.asig && e.tipo === 'examen' ? todos.filter(s => s.tipo === 'estudio' && s.asig === e.asig && s.t < e.t && (!anterior || s.t >= anterior.t)) : [];
     const hechas = sesiones.filter(s => s.estado === 'hecha');
     const prox = sesiones.find(s => s.estado !== 'hecha' && s.t + s.min * 60000 > ahora);
+    // Lo que ya tendría que estar hecho a estas alturas, para avisar si vas atrasado.
+    const minPrevistos = sesiones.filter(s => s.t + s.min * 60000 <= ahora).reduce((n, x) => n + x.min, 0);
     return {
       id: e.id, cal: e.cal, t: e.t, titulo: e.titulo, tipo: e.tipo, asig: e.asig, lugar: e.lugar, desc: e.desc,
-      dia: e.dia, hora: e.hora, todoDia: e.todoDia, faltan: diasEntre_(hoy, e.dia),
+      dia: e.dia, hora: e.tipo === 'entrega' && !e.todoDia ? e.horaFin : e.hora, todoDia: e.todoDia, faltan: diasEntre_(hoy, e.dia),
       minHechos: hechas.reduce((s, x) => s + x.min, 0),
       minTotal: sesiones.reduce((s, x) => s + x.min, 0),
+      minPrevistos,
+      simulacros: sesiones.filter(s => s.simulacro != null).map(s => ({ dia: s.dia, nota: s.simulacro })),
       prox: prox ? { dia: prox.dia, hora: prox.hora, titulo: prox.titulo } : null,
-      sesiones: sesiones.map(s => ({ dia: s.dia, hora: s.hora, min: s.min, titulo: s.titulo, hecha: s.estado === 'hecha', pasada: s.t + s.min * 60000 <= ahora })),
+      sesiones: sesiones.map(s => ({ dia: s.dia, hora: s.hora, min: s.min, titulo: s.titulo, hecha: s.estado === 'hecha', pasada: s.t + s.min * 60000 <= ahora, nota: s.nota })),
     };
   });
   try { cache.put('cuenta', JSON.stringify({ hoy, lista }), 600); } catch (err) {}
@@ -583,12 +727,13 @@ function cuenta_(hoy) {
 
 // ---------- Tareas ----------
 
-function crearTarea_(titulo, dia) {
+function crearTarea_(titulo, dia, lista) {
   titulo = limpiar_(titulo);
   if (!titulo) throw new Error('Pon qué tienes que hacer');
   dia = diaValido_(dia);
-  anadir_('Tareas', { id: nuevoId_('t'), titulo, dia, hecha: '', creada: new Date() });
-  return '✅ Tarea: ' + titulo + (dia ? ' · para el ' + fechaCorta_(dia) : '');
+  lista = lista === 'cau' ? 'cau' : '';
+  anadir_('Tareas', { id: nuevoId_('t'), titulo, dia, hecha: '', creada: new Date(), lista });
+  return '✅ ' + (lista ? 'Para el cau' : 'Tarea') + ': ' + titulo + (dia ? ' · para el ' + fechaCorta_(dia) : '');
 }
 
 // Pendientes y las hechas en la última semana.
@@ -596,24 +741,280 @@ function tareas_(hoy) {
   const limite = diaMas_(hoy, -7);
   return leer_('Tareas').map(r => ({
     id: String(r.id), titulo: String(r.titulo),
-    dia: r.dia instanceof Date ? diaDe_(r.dia) : String(r.dia || ''),
+    dia: celdaDia_(r.dia),
     hecha: r.hecha ? diaDe_(new Date(r.hecha)) : '',
+    lista: String(r.lista || ''),
   })).filter(t => !t.hecha || t.hecha >= limite)
     .sort((a, b) => (a.dia || '9999') < (b.dia || '9999') ? -1 : (a.dia || '9999') > (b.dia || '9999') ? 1 : 0);
 }
 
+// ---------- Hábitos ----------
+
+function marcas_() {
+  return leer_('Marcas').map(r => ({ dia: celdaDia_(r.dia), habito: String(r.habito) }));
+}
+
+// Cada hábito con los días marcados de las últimas dos semanas y su racha (días seguidos hasta hoy o ayer).
+function habitos_(hoy) {
+  const marcas = marcas_();
+  return leer_('Habitos').sort((a, b) => (Number(a.orden) || 0) - (Number(b.orden) || 0)).map(h => {
+    const id = String(h.id);
+    const dias = {};
+    marcas.filter(m => m.habito === id).forEach(m => { dias[m.dia] = true; });
+    let racha = 0;
+    for (let d = dias[hoy] ? hoy : diaMas_(hoy, -1); dias[d]; d = diaMas_(d, -1)) racha++;
+    const ultimos = [];
+    for (let i = 13; i >= 0; i--) ultimos.push(!!dias[diaMas_(hoy, -i)]);
+    return { id, nombre: String(h.nombre), hoy: !!dias[hoy], racha, ultimos };
+  });
+}
+
+// ---------- Temario y tarjetas ----------
+
+// d: { asig, examen, apartados: [{ apartado: '2.6', titulo: 'Mallas y nudos' }] } — se conserva el color ya marcado.
+function cargarTemario_(d) {
+  const asig = limpiar_(d.asig), examen = limpiar_(d.examen);
+  if (!asig || !examen) throw new Error('Falta la asignatura o el examen');
+  const antes = {};
+  leer_('Temario').filter(r => String(r.asig) === asig && String(r.examen) === examen).forEach(r => { antes[String(r.apartado)] = String(r.estado || ''); });
+  borrarDonde_('Temario', r => String(r.asig) === asig && String(r.examen) === examen);
+  const lista = [].concat(d.apartados || []);
+  filas_('Temario', lista.map(a => ({ id: nuevoId_('a'), asig, examen, apartado: "'" + String(a.apartado), titulo: a.titulo, estado: antes[String(a.apartado)] || '' })));
+  return 'Temario de ' + examen + ': ' + lista.length + ' apartados';
+}
+
+function temario_() {
+  return leer_('Temario').map(r => ({ id: String(r.id), asig: String(r.asig), examen: String(r.examen), apartado: String(r.apartado), titulo: String(r.titulo), estado: String(r.estado || '') }));
+}
+
+// d: { asig, tarjetas: [{ tema, frente, dorso }] } — sustituye las de esa asignatura y conserva el progreso de las que siguen.
+function cargarTarjetas_(d) {
+  const asig = limpiar_(d.asig);
+  if (!asig) throw new Error('Falta la asignatura');
+  const antes = {};
+  leer_('Tarjetas').filter(r => String(r.asig) === asig).forEach(r => { antes[String(r.frente)] = { caja: r.caja, proxima: celdaDia_(r.proxima) }; });
+  borrarDonde_('Tarjetas', r => String(r.asig) === asig);
+  const hoy = diaDe_(new Date());
+  const lista = [].concat(d.tarjetas || []);
+  filas_('Tarjetas', lista.map(t => {
+    const a = antes[limpiar_(t.frente)] || {};
+    return { id: nuevoId_('c'), asig, tema: t.tema, frente: t.frente, dorso: t.dorso, caja: a.caja || 1, proxima: a.proxima || hoy };
+  }));
+  return 'Tarjetas de ' + asig + ': ' + lista.length;
+}
+
+// Las que tocan hoy (o antes), primero las de caja baja.
+function tarjetas_(hoy) {
+  const todas = leer_('Tarjetas').map(r => ({ id: String(r.id), asig: String(r.asig), tema: String(r.tema), frente: String(r.frente), dorso: String(r.dorso), caja: Number(r.caja) || 1, proxima: celdaDia_(r.proxima) }));
+  return { total: todas.length, hoy: todas.filter(t => !t.proxima || t.proxima <= hoy).sort((a, b) => a.caja - b.caja).slice(0, 40) };
+}
+
+// ---------- Semana ----------
+
+// De lunes a domingo: sesiones de estudio hechas y previstas, entrenos, hábitos y lo que quedó sin hacer.
+function semana_(hoy, evsSemana) {
+  const lunes = diaMas_(hoy, 1 - diaSemana_(hoy));
+  const ahora = Date.now();
+  const evs = evsSemana || eventos_(lunes, diaMas_(lunes, 14));
+  const esta = evs.filter(e => e.dia >= lunes && e.dia < diaMas_(lunes, 7));
+  const estudio = esta.filter(e => e.tipo === 'estudio' && !e.todoDia);
+  const entrenos = esta.filter(e => e.tipo === 'entreno' && !e.todoDia);
+  const porAsig = {};
+  estudio.forEach(e => {
+    const a = porAsig[e.asig || '—'] = porAsig[e.asig || '—'] || { asig: e.asig || '—', hecho: 0, previsto: 0 };
+    a.previsto += e.min;
+    if (e.estado === 'hecha') a.hecho += e.min;
+  });
+  const sigLunes = diaMas_(lunes, 7);
+  const proxima = {};
+  evs.filter(e => e.tipo === 'estudio' && e.dia >= sigLunes && e.dia < diaMas_(sigLunes, 7)).forEach(e => { proxima[e.asig || '—'] = (proxima[e.asig || '—'] || 0) + e.min; });
+  const habitos = habitos_(hoy);
+  const diasPasados = diaSemana_(hoy);
+  let marcasSemana = 0;
+  habitos.forEach(h => { for (let i = 0; i < diasPasados; i++) if (h.ultimos[13 - i]) marcasSemana++; });
+  const pasadas = estudio.filter(e => e.t + e.min * 60000 <= ahora);
+  return {
+    lunes, domingo: diaMas_(lunes, 6),
+    estudio: { hecho: estudio.filter(e => e.estado === 'hecha').reduce((n, e) => n + e.min, 0), previsto: estudio.reduce((n, e) => n + e.min, 0), sesiones: estudio.length, hechas: estudio.filter(e => e.estado === 'hecha').length },
+    porAsig: Object.keys(porAsig).map(k => porAsig[k]),
+    entrenos: { hechos: entrenos.filter(e => e.estado === 'hecha').length, previstos: entrenos.length },
+    habitos: { marcas: marcasSemana, posibles: habitos.length * diasPasados },
+    sinHacer: pasadas.filter(e => e.estado !== 'hecha').map(e => ({ id: e.id, cal: e.cal, t: e.t, titulo: e.titulo, dia: e.dia, hora: e.hora })),
+    proxima: Object.keys(proxima).map(k => ({ asig: k, min: proxima[k] })),
+  };
+}
+
+function textoSemana_() {
+  const hoy = diaDe_(new Date());
+  const s = semana_(hoy);
+  const pct = (a, b) => (b ? Math.round(a / b * 100) : 0) + ' %';
+  const lineas = ['Tu semana (' + fechaCorta_(s.lunes) + ' – ' + fechaCorta_(s.domingo) + '):'];
+  lineas.push('· Estudio: ' + horas_(s.estudio.hecho) + ' de ' + horas_(s.estudio.previsto) + ' (' + pct(s.estudio.hecho, s.estudio.previsto) + ').');
+  if (s.entrenos.previstos) lineas.push('· Entrenos: ' + s.entrenos.hechos + ' de ' + s.entrenos.previstos + '.');
+  if (s.habitos.posibles) lineas.push('· Hábitos: ' + pct(s.habitos.marcas, s.habitos.posibles) + '.');
+  if (s.sinHacer.length) lineas.push('Sin hacer: ' + s.sinHacer.map(e => e.titulo).join(', ') + '. Ábrelas en Plum para recolocarlas.');
+  if (s.proxima.length) lineas.push('La semana que viene: ' + s.proxima.map(p => p.asig + ' ' + horas_(p.min)).join(', ') + '.');
+  const ex = examenPrincipal_(cuenta_(hoy));
+  if (ex) lineas.push('Próximo examen: ' + ex.titulo + ' en ' + ex.faltan + ' días' + (ex.minTotal ? ' (llevas ' + horas_(ex.minHechos) + ' de ' + horas_(ex.minTotal) + ').' : '.'));
+  return lineas.join('\n');
+}
+
+// ---------- Widget, informe y Atenea ----------
+
+// Lo justo para el widget: lo que toca ahora o después, el examen más cercano y los hábitos que faltan hoy.
+function widget_() {
+  const ahora = new Date();
+  const hoy = diaDe_(ahora);
+  const t = ahora.getTime();
+  const evs = eventos_(hoy, diaMas_(hoy, 2)).filter(e => !e.todoDia && e.t + e.min * 60000 > t && e.tipo !== 'trabajo');
+  const ex = examenPrincipal_(cuenta_(hoy));
+  const h = habitos_(hoy);
+  return {
+    hoy, hora: horaDe_(ahora), diaSemana: DIAS_SEMANA[diaSemana_(hoy) - 1], diaMes: Number(hoy.slice(8)),
+    eventos: evs.slice(0, 5).map(e => ({ titulo: e.titulo, hora: e.hora, horaFin: e.horaFin, tipo: e.tipo, ahora: e.t <= t, manana: e.dia > hoy, paso: primerPaso_(e) })),
+    examen: ex ? { titulo: ex.titulo, faltan: ex.faltan, hechos: ex.minHechos, total: ex.minTotal } : null,
+    habitos: h.filter(x => !x.hoy).length,
+  };
+}
+
+// El examen que más importa ahora: el primero con plan de estudio; si ninguno lo tiene, el más cercano.
+function examenPrincipal_(lista) {
+  const exs = lista.filter(e => e.tipo === 'examen');
+  return exs.find(e => e.minTotal > 0) || exs[0] || null;
+}
+
+function primerPaso_(e) {
+  const pasos = String(e.desc || '').split('\n').map(x => x.trim()).filter(Boolean);
+  const hechos = String(e.pasos || '').split(',');
+  const i = pasos.findIndex((x, j) => hechos.indexOf(String(j)) < 0);
+  return i >= 0 ? pasos[i] : '';
+}
+
+// Para que Claude vea cómo va todo y ajuste el plan.
+function informe_() {
+  const hoy = diaDe_(new Date());
+  const evs = eventos_(diaMas_(hoy, -60), diaMas_(hoy, 60)).filter(e => e.tipo === 'estudio' || e.tipo === 'examen' || e.tipo === 'entrega');
+  return {
+    hoy,
+    sesiones: evs.filter(e => e.tipo === 'estudio').map(e => ({ dia: e.dia, hora: e.hora, min: e.min, asig: e.asig, titulo: e.titulo, estado: e.estado, nota: e.nota, simulacro: e.simulacro, pasos: e.pasos })),
+    examenes: cuenta_(hoy).map(e => ({ titulo: e.titulo, asig: e.asig, dia: e.dia, faltan: e.faltan, minHechos: e.minHechos, minPrevistos: e.minPrevistos, minTotal: e.minTotal })),
+    temario: temario_(),
+    tarjetas: leer_('Tarjetas').map(r => ({ asig: String(r.asig), tema: String(r.tema), caja: Number(r.caja) || 1 })),
+    habitos: habitos_(hoy).map(h => ({ nombre: h.nombre, racha: h.racha, ultimos: h.ultimos })),
+    semana: semana_(hoy),
+  };
+}
+
+// Trae las entregas y exámenes del calendario de Atenea (enlace en la propiedad ATENEA_ICS).
+// La lanza un activador cada 6 horas; también se puede lanzar a mano desde Plum.
+function sincronizarAtenea() {
+  const url = PropertiesService.getScriptProperties().getProperty('ATENEA_ICS');
+  if (!url) return 'Falta el enlace del calendario de Atenea';
+  const r = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  if (r.getResponseCode() !== 200) throw new Error('Atenea no responde (error ' + r.getResponseCode() + ')');
+  const ahora = Date.now();
+  const lista = leerIcs_(r.getContentText()).filter(x => x.fin > ahora && !/\b(s'obre|obre|opens|abre)\b/i.test(x.titulo));
+  const cal = calEscribir_();
+  const existentes = {};
+  const propias = [];  // entregas y exámenes apuntados a mano o por el plan, para no duplicarlos
+  cal.getEvents(new Date(ahora - 86400000), new Date(ahora + 300 * 86400000)).forEach(ev => {
+    const uid = ev.getTag(TAG.atenea);
+    if (uid) existentes[uid] = ev;
+    else if (/^(entrega|examen)$/.test(ev.getTag(TAG.tipo) || '')) propias.push({ asig: ev.getTag(TAG.asig) || '', fin: ev.getEndTime().getTime() });
+  });
+  let nuevos = 0, cambiados = 0, quitados = 0;
+  const vistos = {};
+  lista.forEach(x => {
+    vistos[x.uid] = true;
+    const asig = (ASIG_ATENEA.find(([re]) => re.test(x.curso + ' ' + x.titulo)) || [])[1] || '';
+    // Moodle añade «es tanca», «venç»… al nombre: sobra, ya es una entrega con su hora.
+    const nombre = x.titulo.replace(/\s*[-–:]?\s*(es tanca|tanca|closes|is due|venç|vence|se cierra|finalitza|data de lliurament)\s*$/i, '');
+    const titulo = limpiar_((asig ? asig + ' · ' : '') + nombre);
+    // Una entrega es un instante: se apunta como media hora que acaba a la hora límite.
+    const fin = new Date(x.fin);
+    const ini = new Date(x.ini < x.fin ? x.ini : x.fin - 30 * 60000);
+    const ev = existentes[x.uid];
+    if (!ev && propias.some(p => p.asig === asig && Math.abs(p.fin - x.fin) <= 6 * 3600000)) return;
+    if (ev) {
+      if (ev.getTitle() !== titulo) { ev.setTitle(titulo); cambiados++; }
+      if (ev.getStartTime().getTime() !== ini.getTime() || ev.getEndTime().getTime() !== fin.getTime()) { ev.setTime(ini, fin); cambiados++; }
+      return;
+    }
+    const e = cal.createEvent(titulo, ini, fin, { description: 'De Atenea' + (x.curso ? ' · ' + x.curso : '') });
+    ponerTipo_(e, /\b(examen|control|parcial)\b/i.test(x.titulo) ? 'examen' : 'entrega', false, true);
+    e.setTag(TAG.atenea, x.uid);
+    if (asig) e.setTag(TAG.asig, asig);
+    nuevos++;
+  });
+  // Lo que Atenea ya no tiene (lo han quitado o cambiado de grupo) se quita también de Plum.
+  Object.keys(existentes).forEach(uid => {
+    if (!vistos[uid] && existentes[uid].getEndTime().getTime() > ahora) { existentes[uid].deleteEvent(); quitados++; }
+  });
+  PropertiesService.getScriptProperties().setProperty('ATENEA_ULTIMA', new Date().toISOString());
+  tocado_();
+  return 'Atenea: ' + nuevos + ' nuevas, ' + cambiados + ' cambios' + (quitados ? ', ' + quitados + ' quitadas' : '');
+}
+
+// Calendario .ics → [{ uid, titulo, curso, ini, fin }] (ms). Solo lo que hace falta de VEVENT.
+function leerIcs_(texto) {
+  const lineas = String(texto).replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '').split(/\r?\n/);
+  const out = [];
+  let ev = null;
+  const valor = v => v.replace(/\\n/g, '\n').replace(/\\([,;\\])/g, '$1').trim();
+  const fecha = (v, params) => {
+    const m = v.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z?))?$/);
+    if (!m) return NaN;
+    if (!m[4]) return Utilities.parseDate(m[1] + '-' + m[2] + '-' + m[3] + ' 23:59', TZ, 'yyyy-MM-dd HH:mm').getTime();
+    if (m[7] === 'Z') return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+    const tz = (params.match(/TZID=([^;:]+)/) || [])[1] || TZ;
+    return Utilities.parseDate(m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5], tz, 'yyyy-MM-dd HH:mm').getTime();
+  };
+  lineas.forEach(l => {
+    if (l === 'BEGIN:VEVENT') { ev = { uid: '', titulo: '', curso: '', ini: NaN, fin: NaN }; return; }
+    if (l === 'END:VEVENT') {
+      if (ev && ev.uid && ev.titulo && !isNaN(ev.ini)) {
+        if (isNaN(ev.fin)) ev.fin = ev.ini;
+        out.push(ev);
+      }
+      ev = null;
+      return;
+    }
+    if (!ev) return;
+    const i = l.indexOf(':');
+    if (i < 0) return;
+    const clave = l.slice(0, i), v = l.slice(i + 1);
+    const nombre = clave.split(';')[0].toUpperCase();
+    if (nombre === 'UID') ev.uid = v.trim();
+    else if (nombre === 'SUMMARY') ev.titulo = valor(v);
+    else if (nombre === 'CATEGORIES') ev.curso = valor(v);
+    else if (nombre === 'DTSTART') ev.ini = fecha(v.trim(), clave);
+    else if (nombre === 'DTEND') ev.fin = fecha(v.trim(), clave);
+  });
+  return out;
+}
+
 // ---------- Datos para el panel ----------
 
-// Ayer (para preguntar por las sesiones sin marcar), hoy y la semana que viene.
+// Ayer (para preguntar por las sesiones sin marcar), hoy y la semana que viene; y la semana en curso para Week.
 function datos_() {
   const ahora = new Date();
   const hoy = diaDe_(ahora);
+  const lunes = diaMas_(hoy, 1 - diaSemana_(hoy));
+  const desde = lunes < diaMas_(hoy, -1) ? lunes : diaMas_(hoy, -1);
+  const todos = eventos_(desde, diaMas_(lunes, 14));
+  const props = PropertiesService.getScriptProperties();
   return {
     hoy, ahora: horaDe_(ahora), ms: ahora.getTime(),
-    eventos: eventos_(diaMas_(hoy, -1), diaMas_(hoy, 8)),
+    eventos: todos.filter(e => e.diaFin >= diaMas_(hoy, -1) && e.dia < diaMas_(hoy, 8)),
     examenes: cuenta_(hoy),
     tareas: tareas_(hoy),
-    tipos: Object.keys(TIPOS).map(id => ({ id, nombre: TIPOS[id].nombre, min: TIPOS[id].min })),
+    habitos: habitos_(hoy),
+    temario: temario_(),
+    tarjetas: tarjetas_(hoy),
+    semana: semana_(hoy, todos),
+    atenea: { conectado: !!props.getProperty('ATENEA_ICS'), ultima: props.getProperty('ATENEA_ULTIMA') || '' },
+    exec: ScriptApp.getService().getUrl(),
+    tangerine: WEB_TANGERINE,
   };
 }
 
@@ -642,6 +1043,55 @@ function horas_(min) {
   const h = Math.round(min / 6) / 10;
   return String(h).replace('.', ',') + ' h';
 }
+
+const SCRIPTABLE_ = `// Widget de Plum para Scriptable. Pega esto en un script nuevo y ponlo en un widget mediano o pequeño.
+// Al tocarlo se abre Plum.
+const URL = '__URL__';
+const C = { fondo: '#0c0c0d', acento: '#c3a2ff', texto: '#f4f4f2', gris: '#9a9aa1', tenue: '#67676e', examen: '#ff6b5e' };
+const TIPO = { estudio: '#c3a2ff', examen: '#ff6b5e', entrega: '#ffc247', clase: '#5aa2ff', entreno: '#ff9f43', cau: '#3fd69b', viaje: '#4dd0e1', cita: '#ff8fc7', plan: '#a3e635', evento: '#9a9aa1' };
+const col = c => new Color(c);
+const fm = Files.local();
+const cache = fm.joinPath(fm.documentsDirectory(), 'plum-widget.json');
+let d = null;
+try { d = await new Request(URL).loadJSON(); fm.writeString(cache, JSON.stringify(d)); } catch (e) { try { d = JSON.parse(fm.readString(cache)); } catch (e2) {} }
+const w = new ListWidget();
+w.backgroundColor = col(C.fondo);
+w.setPadding(14, 16, 14, 16);
+w.url = 'https://hidegalaxy.github.io/plum/';
+w.refreshAfterDate = new Date(Date.now() + 15 * 60000);
+const pequeno = config.widgetFamily === 'small';
+function texto(pila, t, color, fuente, lineas) { const x = pila.addText(t); x.textColor = col(color); x.font = fuente; x.lineLimit = lineas || 1; return x; }
+if (!d || d.error) {
+  texto(w, 'Plum', C.acento, Font.boldSystemFont(16));
+  texto(w, 'Sin conexión', C.gris, Font.systemFont(13));
+} else {
+  const cab = w.addStack();
+  cab.centerAlignContent();
+  texto(cab, d.diaSemana.toUpperCase() + ' ' + d.diaMes, C.acento, Font.boldSystemFont(12));
+  cab.addSpacer();
+  if (d.habitos && !pequeno) texto(cab, d.habitos + (d.habitos === 1 ? ' hábito' : ' hábitos'), C.gris, Font.mediumSystemFont(11));
+  w.addSpacer(6);
+  const e = d.eventos[0];
+  if (e) {
+    texto(w, e.ahora ? 'AHORA · HASTA ' + e.horaFin : (e.manana ? 'MAÑANA · ' : '') + e.hora, TIPO[e.tipo] || C.acento, Font.boldSystemFont(11));
+    texto(w, e.titulo, C.texto, Font.boldSystemFont(pequeno ? 15 : 17), 2);
+    if (e.paso && !pequeno) texto(w, e.paso, C.gris, Font.systemFont(12), 2);
+  } else {
+    texto(w, 'Nada más hoy', C.gris, Font.systemFont(14));
+  }
+  w.addSpacer();
+  if (d.examen) {
+    const f = w.addStack();
+    f.centerAlignContent();
+    texto(f, d.examen.faltan + (d.examen.faltan === 1 ? ' día' : ' días'), C.examen, Font.boldSystemFont(13));
+    f.addSpacer(6);
+    texto(f, d.examen.titulo, C.gris, Font.systemFont(12));
+  }
+}
+Script.setWidget(w);
+if (!config.runsInWidget) await w.presentMedium();
+Script.complete();
+`;
 
 // <interpretar>
 // Entiende frases en castellano o catalán como «examen de fluidos el jueves a las 10»
@@ -885,6 +1335,14 @@ function leer_(nombre) {
   return out;
 }
 
+// Varias filas de golpe (mucho más rápido que una a una).
+function filas_(nombre, objs) {
+  if (!objs.length) return;
+  const h = hoja_(nombre);
+  const cab = cabecera_(h);
+  h.getRange(h.getLastRow() + 1, 1, objs.length, cab.length).setValues(objs.map(o => cab.map(c => celda_(o[c]))));
+}
+
 function anadir_(nombre, obj) {
   const h = hoja_(nombre);
   h.appendRow(cabecera_(h).map(c => celda_(obj[c])));
@@ -948,6 +1406,11 @@ function diaValido_(s) {
   if (!m) return '';
   const f = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
   return f.getUTCMonth() === +m[2] - 1 ? m[0] : '';
+}
+
+// Una celda de fecha de la hoja (Date o texto) → 'yyyy-mm-dd'.
+function celdaDia_(v) {
+  return v instanceof Date ? diaDe_(v) : String(v || '');
 }
 
 function diaDe_(fecha) {
